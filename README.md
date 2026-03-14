@@ -1,12 +1,13 @@
 # Babel Breaker
 
-Babel Breaker は、Minecraft の mod の言語ファイルを翻訳し、  
+Babel Breaker は、Minecraft の mod の言語ファイルを翻訳し、
 **そのまま使えるリソースパック ZIP** を自動生成するツールです。
 
 - `.jar` ファイルをそのまま指定できます
 - 解凍済みの mod フォルダでも使えます
 - AI で自動翻訳もできます
 - すでに翻訳済みの JSON を使うこともできます
+- 補助ツールで元 lang JSON をクリップボードやファイルへ取り出せます
 - **Mac / Windows のどちらでも使えます**
 - **GitHub やターミナルに詳しくなくても使えるように設計されています**
 
@@ -14,7 +15,7 @@ Babel Breaker は、Minecraft の mod の言語ファイルを翻訳し、
 
 ## これは何をするツール？
 
-Minecraft の mod には、文字表示用の言語ファイルがあります。  
+Minecraft の mod には、文字表示用の言語ファイルがあります。
 Babel Breaker は、その言語ファイルを使って、
 
 - 日本語化したり
@@ -31,6 +32,8 @@ Babel Breaker は、その言語ファイルを使って、
 
 - mod の `.jar` をそのまま読み込む
 - mod の中の言語ファイルを自動で探す
+- mod の中の元 lang JSON を取り出してクリップボードへコピーする
+- mod の中の元 lang JSON をファイルとして保存する
 - AI を使って翻訳する
 - すでに翻訳済みの JSON をクリップボードから読む
 - リソースパック ZIP を自動で作る
@@ -49,8 +52,8 @@ Minecraft の言語ファイルは、
 
 **キーを翻訳すると壊れます。**
 
-Babel Breaker は、  
-**キーはそのまま / 値だけ翻訳**  
+Babel Breaker は、
+**キーはそのまま / 値だけ翻訳**
 するように作られています。
 
 ---
@@ -74,7 +77,7 @@ Babel Breaker は、
 
 ## まずはフォルダを作る
 
-最初に、作業用フォルダを 1 つ作ってください。  
+最初に、作業用フォルダを 1 つ作ってください。
 名前は何でも大丈夫です。ここでは例として `BabelBreaker` にします。
 
 中身はこんな感じにしてください。
@@ -82,6 +85,7 @@ Babel Breaker は、
 ```text
 BabelBreaker/
 ├─ babel_breaker.py
+├─ extract_lang_json.py   ← 元 lang JSON 抽出用の補助ツール
 ├─ config.toml
 ├─ README.md
 ├─ icon.png        ← あれば便利
@@ -128,8 +132,8 @@ Python 3.10 以上が出ればそのまま使えます。
 
 ## ターミナルって何？
 
-このツールは、  
-**黒い画面に文字を打って実行するタイプ**  
+このツールは、
+**黒い画面に文字を打って実行するタイプ**
 です。
 
 でも、やることはほとんど決まっています。
@@ -152,8 +156,8 @@ Python 3.10 以上が出ればそのまま使えます。
 Babel Breaker のフォルダへ移動する必要があります。
 
 ### Windows
-BabelBreaker フォルダを開いて、  
-アドレスバーに `cmd` と入力して Enter を押すと、  
+BabelBreaker フォルダを開いて、
+アドレスバーに `cmd` と入力して Enter を押すと、
 その場所でコマンドプロンプトを開けます。
 
 または、PowerShell を開いてから次のように移動します。
@@ -196,7 +200,7 @@ py -m pip install pillow tomli
 
 ## `config.toml` とは？
 
-`config.toml` は、  
+`config.toml` は、
 **普段使う設定を保存しておくファイル** です。
 
 これがあるおかげで、毎回長いコマンドを書かなくて済みます。
@@ -292,6 +296,90 @@ python3 babel_breaker.py
 
 ---
 
+## 補助ツールで元 lang JSON を取り出す
+
+`extract_lang_json.py` は、mod の中にある元の lang を取り出すための補助ツールです。
+
+これは特に、
+
+- clipboard モードで使う元 JSON を確認したい時
+- 翻訳サービスや別の AI に投げる前に JSON を抜き出したい時
+- 元の en_us.json をファイルとして保存しておきたい時
+
+に便利です。
+
+### いちばん簡単な使い方
+
+#### Windows
+```bash
+py extract_lang_json.py "C:\Users\you\Downloads\SomeMod.jar"
+```
+
+#### Mac
+```bash
+python3 extract_lang_json.py "/Users/you/Downloads/SomeMod.jar"
+```
+
+これで、
+
+- mod の中の lang を自動で選ぶ
+- JSON 形式に整える
+- クリップボードへコピーする
+
+ところまでやります。
+
+### ファイルにも保存したい時
+
+#### Windows
+```bash
+py extract_lang_json.py "C:\Users\you\Downloads\SomeMod.jar" --output "C:\Users\you\Desktop\SomeMod_en_us.json"
+```
+
+#### Mac
+```bash
+python3 extract_lang_json.py "/Users/you/Downloads/SomeMod.jar" --output "/Users/you/Desktop/SomeMod_en_us.json"
+```
+
+この場合は、
+
+- クリップボードにもコピーする
+- 同じ内容を JSON ファイルにも保存する
+
+の両方を行います。
+
+### ファイルだけ欲しい時
+
+```bash
+python3 extract_lang_json.py "/Users/you/Downloads/SomeMod.jar" --output "/Users/you/Desktop/SomeMod_en_us.json" --no-clipboard
+```
+
+### locale を変えたい時
+
+デフォルトでは `en_us`、次に `en_gb` を優先します。  
+別の locale を優先したい時は `--locale` を使います。
+
+```bash
+python3 extract_lang_json.py "/Users/you/Downloads/SomeMod.jar" --locale en_gb --locale fr_fr
+```
+
+### namespace を手動で指定したい時
+
+複数 namespace を持つ modpack 的な jar などで、どれを優先するか明示したい場合は `--namespace` を使います。
+
+```bash
+python3 extract_lang_json.py "/Users/you/Downloads/SomeMod.jar" --namespace somemod
+```
+
+### 取り出した後の流れ
+
+1. `extract_lang_json.py` で元 JSON を取り出す
+2. JSON の **値だけ** 翻訳する
+3. 翻訳済み JSON をクリップボードへコピーする
+4. `config.toml` の `mode = "clipboard"` にする
+5. `babel_breaker.py` を実行する
+
+---
+
 ## 2つのモード
 
 ### 1. AI 翻訳モード
@@ -328,6 +416,8 @@ mode = "clipboard"
 2. 実行
 
 で ZIP を作れます。
+
+元の lang JSON を抜き出したい時は、先に `extract_lang_json.py` を使うと楽です。
 
 ---
 
@@ -511,15 +601,15 @@ _babel_breaker_output/
 ## うまくいかない時
 
 ### 1. `config.toml` がない
-最初の実行で自動生成されます。  
+最初の実行で自動生成されます。
 生成されたら、その中身を確認してください。
 
 ### 2. APIキーが見つからない
-環境変数が設定されていない可能性があります。  
+環境変数が設定されていない可能性があります。
 もう一度 API キーを入れてから実行してください。
 
 ### 3. icon がない
-無くても動くことが多いですが、pack.png は付きません。  
+無くても動くことが多いですが、pack.png は付きません。
 `icon.png` を `babel_breaker.py` と同じフォルダに置いてください。
 
 ### 4. Python が見つからない
@@ -536,7 +626,7 @@ python3 babel_breaker.py
 ```
 
 ### 5. 翻訳が変
-モデルや API を変えると改善することがあります。  
+モデルや API を変えると改善することがあります。
 また、専門用語の多い mod は、AI より手動調整の方が安定する場合があります。
 
 ---
@@ -567,7 +657,7 @@ python3 babel_breaker.py
 
 ## 免責事項
 
-このツールの使用は **自己責任** です。  
+このツールの使用は **自己責任** です。
 翻訳結果、生成物、導入による不具合、データ損失、互換性問題、配布トラブルなどについて、開発元は責任を負いません。
 
 mod の翻訳公開や再配布を行う場合は、**元 mod のライセンスや配布条件**を必ず確認してください。

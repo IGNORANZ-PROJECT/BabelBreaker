@@ -230,6 +230,7 @@ anthropic_version = "2023-06-01"
 # ここは説明用セクションです。
 #
 # 使い方:
+# 0. 必要なら extract_lang_json.py で元 lang JSON を取り出す
 # 1. 翻訳済み JSON 本文をコピー
 # 2. python3 babel_breaker.py
 #
@@ -250,6 +251,7 @@ enabled = true
 # このフォルダを自動で探します。
 folder = "input"
 
-# このフォルダ内で最初に見つかった .jar かフォルダを使います。
+# このフォルダ内で、mod として扱えそうな .jar / .zip / フォルダを探します。
+# 空フォルダや無関係なフォルダは無視します。
 # false にすると自動探索しません。
 enabled = true

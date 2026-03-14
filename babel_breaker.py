@@ -164,6 +164,15 @@ APP_NAME = "Babel Breaker"
 DEFAULT_OUTPUT_ROOT = "_babel_breaker_output"
 DEFAULT_ICON_BASENAME = "icon"
 ICON_EXT_PRIORITY = [".png", ".webp", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"]
+ARCHIVE_EXTENSIONS = (".jar", ".zip")
+LANG_FILE_EXTENSIONS = (".json", ".lang")
+MOD_METADATA_PATHS = [
+    "fabric.mod.json",
+    "quilt.mod.json",
+    "META-INF/mods.toml",
+    "META-INF/neoforge.mods.toml",
+    "META-INF/MANIFEST.MF",
+]
 
 PACK_FORMAT_RULES = [
     ((1, 20, 0), (1, 20, 1), 15),
@@ -484,6 +493,14 @@ def validate_lang_dict(data: Any) -> dict[str, str]:
     return out
 
 
+def parse_lang_json_text(text: str, label: str) -> dict[str, str]:
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"{label} の JSON 解析に失敗しました: {e}") from e
+    return validate_lang_dict(data)
+
+
 def find_first_existing(root: Path, patterns: list[str]) -> Path | None:
     candidates: list[Path] = []
     for pattern in patterns:
@@ -527,7 +544,11 @@ def parse_mods_toml(mod_root: Path) -> ModInfo | None:
     if not mods_toml:
         return None
 
-    data = load_toml(mods_toml)
+    try:
+        data = load_toml(mods_toml)
+    except Exception as e:
+        raise RuntimeError(f"mod メタデータの読み込みに失敗しました: {mods_toml}\n{e}") from e
+
     mods = data.get("mods", [])
     if not isinstance(mods, list) or not mods:
         return None
@@ -571,7 +592,11 @@ def parse_fabric_mod_json(mod_root: Path) -> ModInfo | None:
     if not fabric_json:
         return None
 
-    data = json.loads(fabric_json.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(fabric_json.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise RuntimeError(f"mod メタデータの読み込みに失敗しました: {fabric_json}\n{e}") from e
+
     mod_id = str(data.get("id", "")).strip()
     if not mod_id:
         return None
@@ -603,7 +628,11 @@ def parse_quilt_mod_json(mod_root: Path) -> ModInfo | None:
     if not quilt_json:
         return None
 
-    data = json.loads(quilt_json.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(quilt_json.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise RuntimeError(f"mod メタデータの読み込みに失敗しました: {quilt_json}\n{e}") from e
+
     ql = data.get("quilt_loader", {})
     if not isinstance(ql, dict):
         return None
@@ -664,20 +693,16 @@ def fallback_from_assets(mod_root: Path) -> ModInfo:
 
 def detect_mod_info(mod_root: Path) -> ModInfo:
     for parser in (parse_mods_toml, parse_fabric_mod_json, parse_quilt_mod_json):
-        try:
-            info = parser(mod_root)
-            if info:
-                if info.mod_version in ("", "${file.jarVersion}"):
-                    info.mod_version = read_manifest_version(mod_root) or info.mod_version or "unknown"
-                return info
-        except Exception:
-            pass
+        info = parser(mod_root)
+        if info:
+            if info.mod_version in ("", "${file.jarVersion}"):
+                info.mod_version = read_manifest_version(mod_root) or info.mod_version or "unknown"
+            return info
     return fallback_from_assets(mod_root)
 
 
 def parse_lang_json_file(path: Path) -> dict[str, str]:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return validate_lang_dict(data)
+    return parse_lang_json_text(path.read_text(encoding="utf-8"), str(path))
 
 
 def parse_legacy_lang_file(path: Path) -> dict[str, str]:
@@ -722,7 +747,7 @@ def discover_lang_sources(mod_root: Path) -> list[LangSource]:
             if not file.is_file():
                 continue
             ext = file.suffix.lower()
-            if ext not in (".json", ".lang"):
+            if ext not in LANG_FILE_EXTENSIONS:
                 continue
             found.append(
                 LangSource(
@@ -772,7 +797,12 @@ def extract_placeholder_tokens(text: str) -> list[str]:
     return sorted(tokens)
 
 
-def sanitize_translated_map(source_chunk: dict[str, str], translated_chunk: dict[str, str], repair: bool) -> tuple[dict[str, str], list[str]]:
+def sanitize_translated_map(
+    source_chunk: dict[str, str],
+    translated_chunk: dict[str, str],
+    repair: bool,
+    label: str = "翻訳結果",
+) -> tuple[dict[str, str], list[str]]:
     warnings: list[str] = []
 
     source_keys = list(source_chunk.keys())
@@ -780,7 +810,7 @@ def sanitize_translated_map(source_chunk: dict[str, str], translated_chunk: dict
     if set(source_keys) != set(translated_keys):
         missing = [k for k in source_keys if k not in translated_chunk]
         extra = [k for k in translated_keys if k not in source_chunk]
-        raise RuntimeError(f"AI がキーを壊しました。missing={missing[:10]} extra={extra[:10]}")
+        raise RuntimeError(f"{label} のキーが元 lang と一致しません。missing={missing[:10]} extra={extra[:10]}")
 
     fixed: dict[str, str] = {}
     for key in source_keys:
@@ -794,6 +824,56 @@ def sanitize_translated_map(source_chunk: dict[str, str], translated_chunk: dict
         fixed[key] = dst_val
 
     return fixed, warnings
+
+
+def validate_clipboard_translation_map(
+    mod_root: Path,
+    mod_info: ModInfo,
+    config: dict[str, Any],
+    clipboard_text: str,
+) -> dict[str, str]:
+    translation = get_section(config, "translation")
+    repair = cfg_bool(translation, "repair_broken_placeholders", True)
+
+    source = choose_translation_source(mod_root, mod_info, config)
+    print(f"[CLIPBOARD] 照合元 lang ファイル: {source.path}")
+    source_map = load_lang_source_dict(source)
+    translated_map = parse_lang_json_text(clipboard_text, "クリップボード")
+    cleaned_map, warnings = sanitize_translated_map(
+        source_map,
+        translated_map,
+        repair,
+        label="クリップボード JSON",
+    )
+    for w in warnings:
+        eprint(w)
+    return cleaned_map
+
+
+def is_supported_input_scan_path(path: Path) -> bool:
+    if path.is_file():
+        return path.suffix.lower() in ARCHIVE_EXTENSIONS
+
+    if not path.is_dir():
+        return False
+
+    for rel_path in MOD_METADATA_PATHS:
+        if (path / rel_path).is_file():
+            return True
+
+    assets_dir = path / "assets"
+    if not assets_dir.is_dir():
+        return False
+
+    for namespace_dir in sorted([p for p in assets_dir.iterdir() if p.is_dir()]):
+        lang_dir = namespace_dir / "lang"
+        if not lang_dir.is_dir():
+            continue
+        for file in lang_dir.iterdir():
+            if file.is_file() and file.suffix.lower() in LANG_FILE_EXTENSIONS:
+                return True
+
+    return False
 
 
 def chunk_dict(data: dict[str, str], chunk_size: int) -> list[dict[str, str]]:
@@ -1102,7 +1182,12 @@ def translate_lang_dict_with_ai(source_map: dict[str, str], source_locale: str, 
         print(f"[AI] 翻訳中 {idx}/{total} ...")
         translated_chunk = call_ai_translate_chunk(chunk, config)
         original_chunk = {k: v for k, v in chunk.items() if k != "__meta_source_locale__"}
-        cleaned_chunk, warnings = sanitize_translated_map(original_chunk, translated_chunk, repair)
+        cleaned_chunk, warnings = sanitize_translated_map(
+            original_chunk,
+            translated_chunk,
+            repair,
+            label="AI の応答",
+        )
         for w in warnings:
             eprint(w)
         merged.update(cleaned_chunk)
@@ -1208,12 +1293,8 @@ def resolve_input_path(ctx: RuntimeContext, cli_input_path: str | None) -> Path:
         scan_dir = ctx.script_dir / folder_name
         if scan_dir.is_dir():
             for p in sorted(scan_dir.iterdir()):
-                if p.is_file() and p.suffix.lower() in (".jar", ".zip"):
+                if is_supported_input_scan_path(p):
                     candidates.append(p)
-                    break
-                if p.is_dir():
-                    candidates.append(p)
-                    break
 
     for p in candidates:
         if p.exists():
@@ -1232,7 +1313,7 @@ def unpack_if_needed(input_path: Path) -> tuple[Path, tempfile.TemporaryDirector
     if input_path.is_dir():
         return input_path, None
 
-    if input_path.is_file() and input_path.suffix.lower() in (".jar", ".zip"):
+    if input_path.is_file() and input_path.suffix.lower() in ARCHIVE_EXTENSIONS:
         temp_dir = tempfile.TemporaryDirectory(prefix="babel_breaker_unpacked_")
         unpack_root = Path(temp_dir.name)
         with zipfile.ZipFile(input_path, "r") as zf:
@@ -1260,7 +1341,7 @@ def build_translated_map(mod_root: Path, mod_info: ModInfo, config: dict[str, An
 
     if mode == "clipboard":
         text = get_clipboard_text()
-        return validate_lang_dict(json.loads(text)), "clipboard"
+        return validate_clipboard_translation_map(mod_root, mod_info, config, text), "clipboard"
 
     if mode == "ai":
         source = choose_translation_source(mod_root, mod_info, config)
