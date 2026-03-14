@@ -580,8 +580,6 @@ MIT License
 
 Copyright (c) IGNORANZ PROJECT
 
-詳細は `LICENSE` ファイルを用意して記載してください。
-
 ---
 
 ## 開発元
