@@ -21,6 +21,10 @@ FIELD_SPECS = {
         ("enforce_consistent_terms", "同じ原文の訳語を揃える", "bool"),
         ("custom_prompt", "AI 追加指示", "multiline"),
     ],
+    "file_mode": [
+        ("translation_files_text", "翻訳ファイル一覧", "multiline"),
+        ("inline_translation_text", "直接入力テキスト", "multiline"),
+    ],
     "pack": [
         ("create_zip", "ZIP を作る", "bool"),
         ("keep_folder", "展開フォルダも残す", "bool"),
@@ -62,4 +66,4 @@ API_STYLE_OPTIONS = [
     "openai_compatible_responses",
 ]
 
-TRANSLATION_MODE_OPTIONS = ["clipboard", "ai"]
+TRANSLATION_MODE_OPTIONS = ["clipboard", "file", "ai"]

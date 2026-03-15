@@ -54,7 +54,7 @@ input_path = ""
 
 # 出力先フォルダです。
 # ZIP や、必要なら展開フォルダがここに出ます。
-output_dir = "_babel_breaker_output"
+output_dir = ""
 
 # 一時フォルダなどの途中経過を詳しく表示したい場合は true
 verbose = false
@@ -63,8 +63,9 @@ verbose = false
 [translation]
 # 翻訳モード:
 # "clipboard" = すでに翻訳済み JSON をクリップボードから読む
+# "file"      = 翻訳済み JSON / TXT ファイルや直接入力テキストを使う
 # "ai"        = 元の lang ファイルを見つけて AI で自動翻訳する
-mode = "clipboard"
+mode = "file"
 
 # 出力先 locale です。
 # これが最終的なファイル名にも使われます。
@@ -73,12 +74,12 @@ mode = "clipboard"
 # target_locale = "ja_jp" -> ja_jp.json
 # target_locale = "fr_fr" -> fr_fr.json
 # target_locale = "de_de" -> de_de.json
-target_locale = "ja_jp"
+target_locale = ""
 
 # mod 側に target_locale の lang が既に入っていた場合は、
 # 抽出や生成をそこで止める安全装置です。
 # すでに公式翻訳や同梱翻訳がある mod を二重に処理しないためのものです。
-cancel_if_target_locale_exists = true
+cancel_if_target_locale_exists = false
 
 # AI に説明するための人間向けの言語名です。
 # 分かりやすく書いておくと翻訳の安定性が少し上がります。
@@ -87,7 +88,7 @@ cancel_if_target_locale_exists = true
 # "Japanese (日本語)"
 # "French (Français)"
 # "German (Deutsch)"
-target_language_name = "Japanese (日本語)"
+target_language_name = ""
 
 # AI が元の lang を探すとき、どの locale を優先するかです。
 # 通常は英語が元なのでこのままで大丈夫です。
@@ -100,11 +101,11 @@ chunk_size = 120
 
 # プレースホルダが壊れた行を原文に戻す安全装置
 # true 推奨
-repair_broken_placeholders = true
+repair_broken_placeholders = false
 
 # 同じ原文に対して同じ訳語を使うためのメモリ機能です。
 # true のとき、前のチャンクで確定した同一原文の訳語を次のチャンクでも優先します。
-enforce_consistent_terms = true
+enforce_consistent_terms = false
 
 # AI へ追加で渡すカスタム指示です。
 # mod ごとの世界観、口調、固有名詞ルールなどを書けます。
@@ -122,9 +123,40 @@ enforce_consistent_terms = true
 custom_prompt = ""
 
 
+[file_mode]
+# translation.mode = "file" の時に使う入力です。
+#
+# translation_files_text:
+# 複数ファイルを指定する場合は 1 行 1 ファイルで並べます。
+# .json / .txt 以外でも、テキストとして読めれば解析を試みます。
+#
+# 例:
+# translation_files_text = """
+# /Users/you/Desktop/mod_a_ja.json
+# /Users/you/Desktop/mod_pack_notes.txt
+# """
+translation_files_text = ""
+
+# GUI から直接貼り付ける翻訳データです。
+# JSON 1 個でも、複数の JSON ブロックでも、mod ごとの辞書でも構いません。
+#
+# 例:
+# inline_translation_text = """
+# {
+#   "mod_a": {
+#     "item.example.name": "例のアイテム"
+#   },
+#   "mod_b": {
+#     "block.example.machine": "例の機械"
+#   }
+# }
+# """
+inline_translation_text = ""
+
+
 [pack]
 # ZIP は常に作ります
-create_zip = true
+create_zip = false
 
 # 展開フォルダも残したい場合は true
 # false なら ZIP のみ残します
@@ -146,7 +178,7 @@ icon_path = ""
 # {mod_version}
 # {mod_id}
 # {target_locale}
-pack_name_template = "{app_name}_{mod_name}_{mod_version}_{target_locale}"
+pack_name_template = ""
 
 # pack.mcmeta の description
 # 使える変数:
@@ -156,7 +188,7 @@ pack_name_template = "{app_name}_{mod_name}_{mod_version}_{target_locale}"
 # {mod_id}
 # {target_locale}
 # {mc_version_expr}
-description_template = "{app_name} | {mod_name} {mod_version} -> {target_locale} | MC {mc_version_expr}"
+description_template = ""
 
 
 [minecraft]
@@ -194,7 +226,7 @@ mc_version = ""
 #
 # "openai_compatible_responses"
 #   OpenAI 互換の Responses 形式 API
-style = "gemini_generate_content"
+style = ""
 
 # モデル名
 # Gemini 例:
@@ -205,7 +237,7 @@ style = "gemini_generate_content"
 #
 # Anthropic 例:
 # model = "claude-sonnet-4-5"
-model = "gemini-2.5-flash"
+model = ""
 
 # API URL
 # 空にすると、style に応じた安全な既定値を自動で使います。
@@ -233,7 +265,7 @@ url = ""
 # Gemini   -> GEMINI_API_KEY
 # OpenAI   -> OPENAI_API_KEY
 # Anthropic-> ANTHROPIC_API_KEY
-api_key_env = "GEMINI_API_KEY"
+api_key_env = ""
 
 # どうしても直書きしたい場合だけ使ってください。
 # 通常は空のままで、環境変数を使う方が安全です。
@@ -250,7 +282,7 @@ temperature = 0.2
 max_output_tokens = 8192
 
 # Anthropic 用バージョンヘッダ
-anthropic_version = "2023-06-01"
+anthropic_version = ""
 
 
 [clipboard]
@@ -272,20 +304,20 @@ anthropic_version = "2023-06-01"
 # - キーは変えない
 # - 値だけ翻訳する
 # - クリップボードにこの mod 用の JSON が無い時は、元 lang JSON を自動で取得できます
-enabled = true
+enabled = false
 
 # クリップボードが空、JSON でない、またはキーが合わない時に
 # mod に対応する元 lang JSON を自動でクリップボードへ入れます。
 # 値だけ翻訳して再実行してください。
-auto_fetch_source_when_missing = true
+auto_fetch_source_when_missing = false
 
 
 [input_scan]
 # general.input_path が空で、実行時引数も無い時だけ使います。
 # このフォルダを自動で探します。
-folder = "input"
+folder = ""
 
 # このフォルダ内で、mod として扱えそうな .jar / .zip / フォルダを探します。
 # 空フォルダや無関係なフォルダは無視します。
 # false にすると自動探索しません。
-enabled = true
+enabled = false

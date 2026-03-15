@@ -35,7 +35,12 @@ A. clipboard モード
    - すでに翻訳済みの JSON をクリップボードから読む
    - それを <target_locale>.json として pack 化する
 
-B. ai モード
+B. file モード
+   - config.toml の translation.mode = "file"
+   - 翻訳済み JSON / TXT ファイルや直接入力テキストを使う
+   - 1 ファイルに複数 mod 分の辞書があっても自動で照合する
+
+C. ai モード
    - config.toml の translation.mode = "ai"
    - 元の lang ファイルを自動で探す
    - AI API で「値だけ翻訳」する
@@ -181,6 +186,7 @@ verbose = false
 [translation]
 # 翻訳モード:
 # "clipboard" = すでに翻訳済み JSON をクリップボードから読む
+# "file"      = 翻訳済み JSON / TXT ファイルや直接入力テキストを使う
 # "ai"        = 元の lang ファイルを見つけて AI で自動翻訳する
 mode = "clipboard"
 
@@ -238,6 +244,37 @@ enforce_consistent_terms = true
 # UI は短く、会話文は自然な日本語にする。
 # """
 custom_prompt = ""
+
+
+[file_mode]
+# translation.mode = "file" の時に使う入力です。
+#
+# translation_files_text:
+# 複数ファイルを指定する場合は 1 行 1 ファイルで並べます。
+# .json / .txt 以外でも、テキストとして読めれば解析を試みます。
+#
+# 例:
+# translation_files_text = """
+# /Users/you/Desktop/mod_a_ja.json
+# /Users/you/Desktop/mod_pack_notes.txt
+# """
+translation_files_text = ""
+
+# GUI から直接貼り付ける翻訳データです。
+# JSON 1 個でも、複数の JSON ブロックでも、mod ごとの辞書でも構いません。
+#
+# 例:
+# inline_translation_text = """
+# {
+#   "mod_a": {
+#     "item.example.name": "例のアイテム"
+#   },
+#   "mod_b": {
+#     "block.example.machine": "例の機械"
+#   }
+# }
+# """
+inline_translation_text = ""
 
 
 [pack]
@@ -428,6 +465,7 @@ MOD_METADATA_PATHS = [
 CONFIG_SECTION_ORDER = [
     "general",
     "translation",
+    "file_mode",
     "pack",
     "minecraft",
     "api",
@@ -447,6 +485,10 @@ CONFIG_KEY_ORDER = {
         "repair_broken_placeholders",
         "enforce_consistent_terms",
         "custom_prompt",
+    ],
+    "file_mode": [
+        "translation_files_text",
+        "inline_translation_text",
     ],
     "pack": [
         "create_zip",
@@ -513,6 +555,13 @@ class ExtractLangResult:
     source: LangSource
     data: dict[str, str]
     json_text: str
+
+
+@dataclass
+class TranslationCandidate:
+    label: str
+    data: dict[str, str]
+    namespace_hint: str | None = None
 
 
 class ClipboardSourceAutoFetched(Exception):
@@ -1160,6 +1209,183 @@ def parse_lang_json_text(text: str, label: str) -> dict[str, str]:
     return validate_lang_dict(data)
 
 
+def parse_multiline_entries(text: str) -> list[str]:
+    entries: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if "," in line and not any(sep in line for sep in ("/", "\\", ":")):
+            parts = [part.strip() for part in line.split(",")]
+        else:
+            parts = [line]
+        for part in parts:
+            if part and part not in entries:
+                entries.append(part)
+    return entries
+
+
+def parse_legacy_lang_text(text: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            key, value = line.split("=", 1)
+        elif ":" in line:
+            key, value = line.split(":", 1)
+        else:
+            continue
+        key = key.strip()
+        if key:
+            result[key] = value
+    return result
+
+
+def try_validate_lang_dict(data: Any) -> dict[str, str] | None:
+    try:
+        return validate_lang_dict(data)
+    except Exception:
+        return None
+
+
+def parse_json_values_from_text(text: str) -> list[Any]:
+    decoder = json.JSONDecoder()
+    values: list[Any] = []
+    idx = 0
+    length = len(text)
+    while idx < length:
+        match = re.search(r"[\[{]", text[idx:])
+        if not match:
+            break
+        start = idx + match.start()
+        try:
+            value, end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            idx = start + 1
+            continue
+        values.append(value)
+        idx = end
+    return values
+
+
+def extract_translation_candidates_from_object(
+    obj: Any,
+    label: str,
+    namespace_hint: str | None = None,
+) -> list[TranslationCandidate]:
+    candidates: list[TranslationCandidate] = []
+    direct = try_validate_lang_dict(obj)
+    if direct is not None:
+        candidates.append(TranslationCandidate(label=label, data=direct, namespace_hint=namespace_hint))
+        return candidates
+
+    if isinstance(obj, dict):
+        nested_hint = str(
+            obj.get("mod_id")
+            or obj.get("modId")
+            or obj.get("namespace")
+            or obj.get("id")
+            or namespace_hint
+            or ""
+        ).strip() or namespace_hint
+
+        for wrapper_key in ("translations", "data", "lang", "values"):
+            if wrapper_key in obj:
+                candidates.extend(
+                    extract_translation_candidates_from_object(
+                        obj[wrapper_key],
+                        f"{label}.{wrapper_key}",
+                        nested_hint,
+                    )
+                )
+
+        for key, value in obj.items():
+            if key in ("mod_id", "modId", "namespace", "id", "translations", "data", "lang", "values"):
+                continue
+            if not isinstance(value, (dict, list)):
+                continue
+            child_hint = nested_hint
+            key_text = str(key).strip()
+            if not child_hint and re.fullmatch(r"[A-Za-z0-9_.-]+", key_text):
+                child_hint = key_text
+            candidates.extend(
+                extract_translation_candidates_from_object(
+                    value,
+                    f"{label}.{key_text}",
+                    child_hint,
+                )
+            )
+        return candidates
+
+    if isinstance(obj, list):
+        for index, item in enumerate(obj, start=1):
+            candidates.extend(
+                extract_translation_candidates_from_object(
+                    item,
+                    f"{label}[{index}]",
+                    namespace_hint,
+                )
+            )
+    return candidates
+
+
+def load_translation_candidates_from_text(text: str, label: str) -> list[TranslationCandidate]:
+    candidates: list[TranslationCandidate] = []
+    stripped = text.strip()
+    if not stripped:
+        return candidates
+
+    try:
+        root = json.loads(stripped)
+    except json.JSONDecodeError:
+        root = None
+    if root is not None:
+        candidates.extend(extract_translation_candidates_from_object(root, label))
+    else:
+        for index, value in enumerate(parse_json_values_from_text(text), start=1):
+            candidates.extend(extract_translation_candidates_from_object(value, f"{label}#{index}"))
+
+    legacy = parse_legacy_lang_text(text)
+    if legacy:
+        candidates.append(TranslationCandidate(label=f"{label}:legacy", data=legacy))
+
+    deduped: list[TranslationCandidate] = []
+    seen: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
+    for candidate in candidates:
+        signature = (candidate.namespace_hint or "", tuple(sorted(candidate.data.items())))
+        if signature in seen:
+            continue
+        seen.add(signature)
+        deduped.append(candidate)
+    return deduped
+
+
+def load_translation_candidates_from_sources(config: dict[str, Any]) -> list[TranslationCandidate]:
+    file_mode = get_section(config, "file_mode")
+    candidates: list[TranslationCandidate] = []
+
+    for path_text in parse_multiline_entries(cfg_str(file_mode, "translation_files_text", "")):
+        path = Path(path_text).expanduser()
+        if not path.exists() or not path.is_file():
+            raise RuntimeError(f"file モードの翻訳ファイルが見つかりません: {path}")
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        loaded = load_translation_candidates_from_text(text, str(path))
+        if not loaded:
+            raise RuntimeError(f"翻訳データとして読める JSON / TXT が見つかりませんでした: {path}")
+        candidates.extend(loaded)
+
+    inline_text = cfg_str(file_mode, "inline_translation_text", "")
+    if inline_text.strip():
+        loaded = load_translation_candidates_from_text(inline_text, "file_mode.inline_translation_text")
+        if not loaded:
+            raise RuntimeError("file モードの直接入力テキストから翻訳データを読めませんでした。")
+        candidates.extend(loaded)
+
+    return candidates
+
+
 def build_lang_json_text(data: dict[str, str]) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
 
@@ -1172,6 +1398,15 @@ def write_output_text_file(path: Path, text: str) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(text, encoding="utf-8", newline="\n")
     return output_path.resolve()
+
+
+def ensure_json_output_path(path: Path) -> Path:
+    expanded = path.expanduser()
+    if expanded.suffix.lower() == ".json":
+        return expanded
+    if expanded.suffix:
+        return expanded.with_suffix(".json")
+    return expanded.with_name(f"{expanded.name}.json")
 
 
 def normalize_locale_priority(values: list[str]) -> list[str]:
@@ -1641,6 +1876,60 @@ def validate_clipboard_translation_map(
     for w in warnings:
         eprint(w)
     return cleaned_map
+
+
+def select_translation_candidate_for_mod(
+    candidates: list[TranslationCandidate],
+    source_map: dict[str, str],
+    mod_info: ModInfo,
+    repair: bool,
+) -> dict[str, str]:
+    matches: list[tuple[tuple[int, int, str], dict[str, str], list[str], TranslationCandidate]] = []
+
+    for candidate in candidates:
+        try:
+            cleaned_map, warnings = sanitize_translated_map(
+                source_map,
+                candidate.data,
+                repair,
+                label=f"file モード候補 ({candidate.label})",
+            )
+        except Exception:
+            continue
+
+        namespace_score = 0 if candidate.namespace_hint and candidate.namespace_hint == mod_info.mod_id else 1
+        label_score = 0 if mod_info.mod_id and mod_info.mod_id in candidate.label else 1
+        score = (namespace_score, label_score, candidate.label)
+        matches.append((score, cleaned_map, warnings, candidate))
+
+    if not matches:
+        raise RuntimeError(
+            "file モードの翻訳データから、この mod に一致する JSON を見つけられませんでした。"
+            " キー集合が元 lang と一致する候補を用意してください。"
+        )
+
+    _, cleaned_map, warnings, candidate = sorted(matches, key=lambda item: item[0])[0]
+    print(f"[FILE] 使用する翻訳データ: {candidate.label}")
+    for warning in warnings:
+        eprint(warning)
+    return cleaned_map
+
+
+def load_file_mode_translation_map(
+    mod_root: Path,
+    mod_info: ModInfo,
+    config: dict[str, Any],
+) -> dict[str, str]:
+    translation = get_section(config, "translation")
+    repair = cfg_bool(translation, "repair_broken_placeholders", True)
+
+    source = choose_translation_source(mod_root, mod_info, config)
+    print(f"[FILE] 照合元 lang ファイル: {source.path}")
+    source_map = load_lang_source_dict(source)
+    candidates = load_translation_candidates_from_sources(config)
+    if not candidates:
+        raise RuntimeError("file モードの翻訳データが指定されていません。翻訳ファイルか直接入力テキストを設定してください。")
+    return select_translation_candidate_for_mod(candidates, source_map, mod_info, repair)
 
 
 def maybe_auto_fetch_source_lang_for_clipboard(
@@ -2240,6 +2529,9 @@ def build_translated_map(mod_root: Path, mod_info: ModInfo, config: dict[str, An
             maybe_auto_fetch_source_lang_for_clipboard(mod_root, mod_info, config, e)
             raise
 
+    if mode == "file":
+        return load_file_mode_translation_map(mod_root, mod_info, config), "file"
+
     if mode == "ai":
         source = choose_translation_source(mod_root, mod_info, config)
         print(f"[AI] 元 lang ファイル: {source.path}")
@@ -2294,6 +2586,14 @@ def create_output_paths(ctx: RuntimeContext, pack_name: str) -> tuple[Path, Path
         zip_path.unlink()
 
     return pack_dir, zip_path, keep_folder
+
+
+def create_extract_output_path(ctx: RuntimeContext, input_path: Path) -> Path:
+    general = get_section(ctx.config, "general")
+    output_dir_name = cfg_str(general, "output_dir", DEFAULT_OUTPUT_ROOT)
+    output_root = ctx.script_dir / output_dir_name
+    file_name = f"{safe_fs_name(input_path.stem or 'source_lang')}.json"
+    return output_root / "_extracted_lang" / file_name
 
 
 def write_pack_files(
@@ -2418,7 +2718,10 @@ def create_resource_pack(ctx: RuntimeContext, original_input_path: Path, mod_roo
 
 
 def run_extract_mode(ctx: RuntimeContext, cli_input_path: str | None, args: argparse.Namespace) -> int:
-    if args.extract_no_clipboard and not args.extract_output.strip():
+    translation = get_section(ctx.config, "translation")
+    file_mode_active = cfg_str(translation, "mode", "ai").lower() == "file"
+    skip_clipboard = args.extract_no_clipboard or file_mode_active
+    if skip_clipboard and not args.extract_output.strip() and not file_mode_active:
         eprint("[ERROR] --extract-no-clipboard を使う場合は、あわせて --extract-output を指定してください。")
         return 1
 
@@ -2448,11 +2751,16 @@ def run_extract_mode(ctx: RuntimeContext, cli_input_path: str | None, args: argp
     print(f"[OK] キー数: {len(result.data)}")
 
     output_path = args.extract_output.strip()
+    if file_mode_active:
+        output_path = str(ensure_json_output_path(Path(output_path))) if output_path else str(create_extract_output_path(ctx, input_path))
     if output_path:
         saved_path = write_output_text_file(Path(output_path), result.json_text)
         print(f"[OK] ファイル保存: {saved_path}")
 
-    if not args.extract_no_clipboard:
+    if file_mode_active:
+        print("[INFO] file モードのため、抽出結果は JSON ファイル保存のみ行います。")
+
+    if not skip_clipboard:
         try:
             method = set_clipboard_text(result.json_text)
             print(f"[OK] クリップボードへコピーしました: {method}")

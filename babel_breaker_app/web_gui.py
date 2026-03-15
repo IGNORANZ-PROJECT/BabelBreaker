@@ -45,6 +45,7 @@ def get_config_path(script_dir: Path) -> Path:
 SECTION_TITLES = {
     "general": "基本",
     "translation": "翻訳",
+    "file_mode": "file モード",
     "pack": "パック",
     "api": "API",
     "clipboard": "clipboard",
@@ -54,7 +55,8 @@ SECTION_TITLES = {
 
 SECTION_DESCRIPTIONS = {
     "general": "入力 mod と出力先の設定です。パスは直接貼り付けるか、右側の選択ボタンを使えます。",
-    "translation": "AI モードと clipboard モードの切り替え、locale、用語統一、カスタム指示を設定します。",
+    "translation": "AI / file / clipboard モードの切り替え、locale、用語統一、カスタム指示を設定します。",
+    "file_mode": "file モードの時だけ使う翻訳データ入力です。複数ファイルと直接貼り付けを併用できます。",
     "pack": "生成するリソースパックの名前、説明、アイコン、保持方式を設定します。",
     "api": "AI モード専用です。通常は API キー環境変数と model を設定します。",
     "clipboard": "clipboard モード補助設定です。翻訳元 JSON の自動取得を制御します。",
@@ -66,6 +68,8 @@ FIELD_HELP = {
     ("translation", "cancel_if_target_locale_exists"): "mod に目的 locale が既に含まれていたら、抽出や生成を安全に中止します。",
     ("translation", "custom_prompt"): "作品用語、口調、公式訳優先ルールなどを自由に書けます。",
     ("translation", "source_locale_priority"): "カンマ区切りで入力します。例: en_us, en_gb",
+    ("file_mode", "translation_files_text"): "1 行 1 ファイル。JSON / TXT を混在できます。1 ファイルに複数 mod 分の辞書が入っていても探索します。",
+    ("file_mode", "inline_translation_text"): "翻訳済み JSON をそのまま貼り付けるか、複数の JSON ブロックをまとめて貼り付けられます。",
     ("api", "api_key_direct"): "必要な場合だけ使ってください。通常は環境変数推奨です。",
 }
 
@@ -309,6 +313,9 @@ class WebGUIApp:
             else:
                 self.extract_state[key] = str(raw or "")
 
+    def get_translation_mode(self, config: dict[str, Any]) -> str:
+        return str(config.get("translation", {}).get("mode", "clipboard") or "clipboard").strip().lower()
+
     def build_runtime_argv(self, config: dict[str, Any], extra: list[str], payload: dict[str, Any] | None = None) -> list[str]:
         argv = list(extra)
         input_path = self.get_effective_input_path(config, payload)
@@ -318,7 +325,8 @@ class WebGUIApp:
 
     def build_extract_argv(self, config: dict[str, Any], payload: dict[str, Any] | None = None) -> list[str]:
         output_path = self.extract_state["extract_output"].strip()
-        if self.extract_state["extract_no_clipboard"] and not output_path:
+        mode = self.get_translation_mode(config)
+        if self.extract_state["extract_no_clipboard"] and not output_path and mode != "file":
             raise RuntimeError("ファイルだけ保存する場合は保存先ファイルを指定してください。")
 
         argv = ["-x"]
@@ -353,7 +361,8 @@ class WebGUIApp:
 
     def build_extract_argv_for_input(self, input_path: str, multiple: bool, index: int) -> list[str]:
         output_path = self.extract_state["extract_output"].strip()
-        if self.extract_state["extract_no_clipboard"] and not output_path:
+        mode = self.get_translation_mode(self.config_data)
+        if self.extract_state["extract_no_clipboard"] and not output_path and mode != "file":
             raise RuntimeError("ファイルだけ保存する場合は保存先ファイルを指定してください。")
 
         argv = ["-x"]
@@ -375,7 +384,13 @@ class WebGUIApp:
         argv.append(input_path)
         return argv
 
-    def run_action_in_background(self, action_name: str, argv_builder: Any, single_argv: list[str] | None = None) -> None:
+    def run_action_in_background(
+        self,
+        action_name: str,
+        argv_builder: Any,
+        single_argv: list[str] | None = None,
+        allow_queue: bool = True,
+    ) -> None:
         with self.lock:
             if self.worker is not None and self.worker.is_alive():
                 raise RuntimeError("別の処理が実行中です。完了するまで待ってください。")
@@ -390,7 +405,7 @@ class WebGUIApp:
             failures = 0
             try:
                 with contextlib.redirect_stdout(stdout_writer), contextlib.redirect_stderr(stderr_writer):
-                    if self.queue_items:
+                    if allow_queue and self.queue_items:
                         print(f"[INFO] キュー処理を開始します。件数: {len(self.queue_items)}")
                         while True:
                             item = self.pop_next_queue_item()
@@ -405,6 +420,8 @@ class WebGUIApp:
                                 failures += 1
                             self.clear_current_job()
                     else:
+                        if not allow_queue and self.queue_items:
+                            print("[INFO] clipboard モードではキューを使わないため、現在の入力だけ処理します。")
                         argv = single_argv or []
                         print(f"[INFO] 実行引数: {' '.join(argv) if argv else '(babel_breaker_app/config.toml の設定のみ)'}")
                         code = self.core.main(argv)
@@ -873,7 +890,7 @@ class WebGUIApp:
       </div>
       <div class="hero-meta">
         <span class="meta-pill">元 lang 自動抽出</span>
-        <span class="meta-pill">AI / clipboard 両対応</span>
+        <span class="meta-pill">AI / file / clipboard</span>
         <span class="meta-pill">設定は折りたたみ</span>
         <span class="meta-pill">Mac / Windows 対応</span>
       </div>
@@ -895,18 +912,18 @@ class WebGUIApp:
             <h2 class="section-title">1. mod を入れる</h2>
             <p class="desc">ふだんは JAR / ZIP をここへドラッグ＆ドロップするだけで十分です。フォルダ入力が必要な時だけ下のフォルダ選択を使ってください。</p>
             <div id="dropzone" class="dropzone">
-              <div class="drop-title">mod JAR / ZIP をここへドロップ</div>
-              <div class="drop-sub">またはファイル選択。フォルダ入力は別ボタンで選べます。</div>
+              <div id="drop-title" class="drop-title">mod JAR / ZIP をここへドロップ</div>
+              <div id="drop-sub" class="drop-sub">またはファイル選択。フォルダ入力は別ボタンで選べます。</div>
               <div class="drop-actions">
                 <button class="accent" data-nonblocking="1" type="button" onclick="document.getElementById('upload-input').click()">ファイルを選ぶ</button>
-                <button class="secondary picker-button" data-nonblocking="1" type="button" onclick="pickPath('queue_input_dir')">フォルダを選ぶ</button>
-                <button class="ghost" data-nonblocking="1" type="button" onclick="runAction('clear_queue')">キューを空にする</button>
+                <button class="secondary picker-button" data-nonblocking="1" type="button" onclick="pickInputFolder()">フォルダを選ぶ</button>
+                <button class="ghost" data-nonblocking="1" data-queue-only="1" type="button" onclick="runAction('clear_queue')">キューを空にする</button>
               </div>
               <input id="upload-input" type="file" accept=".jar,.zip,application/java-archive,application/zip" multiple hidden>
             </div>
           </div>
 
-          <details class="queue-panel" open>
+          <details id="queue-panel" class="queue-panel" open>
             <summary class="queue-header">
               <div>
                 <div class="selected-label">処理キュー</div>
@@ -930,6 +947,7 @@ class WebGUIApp:
             </div>
             <div class="mode-buttons">
               <button id="mode-clipboard" class="mode-button" type="button" onclick="setMode('clipboard')">clipboard</button>
+              <button id="mode-file" class="mode-button" type="button" onclick="setMode('file')">file</button>
               <button id="mode-ai" class="mode-button" type="button" onclick="setMode('ai')">AI</button>
             </div>
             <div class="quick-meta-row">
@@ -937,6 +955,8 @@ class WebGUIApp:
               <span class="quick-meta-chip">出力先: <strong id="quick-output-dir"></strong></span>
             </div>
           </div>
+
+          {self.render_file_mode_inputs()}
 
           <div>
             <h2 class="section-title">3. 実行する</h2>
@@ -992,6 +1012,10 @@ class WebGUIApp:
       return `${{section}}__${{key}}`;
     }}
 
+    function currentMode() {{
+      return document.getElementById(fieldId('translation', 'mode')).value || 'clipboard';
+    }}
+
     function setFlash(message, kind='') {{
       const el = document.getElementById('flash');
       el.textContent = message || '';
@@ -1023,7 +1047,7 @@ class WebGUIApp:
     }}
 
     function updateQuickSummary() {{
-      const mode = document.getElementById(fieldId('translation', 'mode')).value || 'clipboard';
+      const mode = currentMode();
       const locale = document.getElementById(fieldId('translation', 'target_locale')).value || 'ja_jp';
       const outputDir = document.getElementById(fieldId('general', 'output_dir')).value || '_babel_breaker_output';
       const fallbackPath = document.getElementById(fieldId('general', 'input_path')).value || '';
@@ -1035,7 +1059,51 @@ class WebGUIApp:
       renderQueue(effectivePath);
 
       document.getElementById('mode-clipboard').classList.toggle('active', mode === 'clipboard');
+      document.getElementById('mode-file').classList.toggle('active', mode === 'file');
       document.getElementById('mode-ai').classList.toggle('active', mode === 'ai');
+      updateModeVisibility(mode);
+    }}
+
+    function updateModeVisibility(mode) {{
+      if (mode === 'clipboard' && !selectedInputPath && queueItems.length) {{
+        selectedInputPath = queueItems[0].path || '';
+      }}
+      const queuePanel = document.getElementById('queue-panel');
+      const fileModeCard = document.getElementById('file-mode-card');
+      const uploadInput = document.getElementById('upload-input');
+      const dropTitle = document.getElementById('drop-title');
+      const dropSub = document.getElementById('drop-sub');
+      const extractNoClipboard = document.getElementById('extract_no_clipboard');
+      if (queuePanel) queuePanel.hidden = (mode === 'clipboard');
+      if (fileModeCard) fileModeCard.hidden = (mode !== 'file');
+      if (uploadInput) uploadInput.multiple = mode !== 'clipboard';
+      document.querySelectorAll('[data-queue-only="1"]').forEach((el) => {{
+        el.hidden = (mode === 'clipboard');
+      }});
+      if (dropTitle) {{
+        dropTitle.textContent = mode === 'clipboard'
+          ? 'mod JAR / ZIP を 1 件選ぶ'
+          : 'mod JAR / ZIP をここへドロップ';
+      }}
+      if (dropSub) {{
+        dropSub.textContent = mode === 'clipboard'
+          ? 'clipboard モードでは 1 件ずつ処理します。フォルダも 1 件ずつ選んでください。'
+          : 'またはファイル選択。フォルダ入力は別ボタンで選べます。';
+      }}
+      if (extractNoClipboard) {{
+        if (mode === 'file') {{
+          if (!extractNoClipboard.disabled) {{
+            extractNoClipboard.dataset.restoreChecked = extractNoClipboard.checked ? '1' : '0';
+          }}
+          extractNoClipboard.checked = true;
+          extractNoClipboard.disabled = true;
+        }} else {{
+          if (extractNoClipboard.disabled && 'restoreChecked' in extractNoClipboard.dataset) {{
+            extractNoClipboard.checked = extractNoClipboard.dataset.restoreChecked === '1';
+          }}
+          extractNoClipboard.disabled = false;
+        }}
+      }}
     }}
 
     function renderQueue(fallbackPath='') {{
@@ -1110,6 +1178,15 @@ class WebGUIApp:
       updateQuickSummary();
     }}
 
+    function appendUniqueMultilineValue(element, text) {{
+      const existing = String(element.value || '').split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean);
+      const incoming = String(text || '').split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean);
+      for (const item of incoming) {{
+        if (!existing.includes(item)) existing.push(item);
+      }}
+      element.value = existing.join('\\n');
+    }}
+
     function collectPayload() {{
       const config = {{}};
       for (const field of fieldMeta) {{
@@ -1168,7 +1245,13 @@ class WebGUIApp:
       }}
       const fieldIdValue = targetField || result.target_field;
       const el = document.getElementById(fieldIdValue);
-      if (el) el.value = result.path || '';
+      if (el) {{
+        if (fieldIdValue === fieldId('file_mode', 'translation_files_text')) {{
+          appendUniqueMultilineValue(el, result.path || '');
+        }} else {{
+          el.value = result.path || '';
+        }}
+      }}
       if (kind === 'input_file' || kind === 'input_dir' || fieldIdValue === 'selected_input_path') {{
         selectedInputPath = result.path || '';
         updateQuickSummary();
@@ -1177,9 +1260,20 @@ class WebGUIApp:
       setFlash(result.message || '選択しました。', 'ok');
     }}
 
+    async function pickInputFolder() {{
+      const mode = currentMode();
+      await pickPath(mode === 'clipboard' ? 'input_dir' : 'queue_input_dir');
+    }}
+
     async function uploadInputFiles(files) {{
       if (!files || !files.length) return;
+      const mode = currentMode();
+      if (mode === 'clipboard' && files.length > 1) {{
+        setFlash('clipboard モードでは入力 mod は 1 件ずつ指定してください。', 'error');
+        return;
+      }}
       const formData = new FormData();
+      formData.append('queue_enabled', mode === 'clipboard' ? '0' : '1');
       for (const file of files) {{
         formData.append('input_file', file);
       }}
@@ -1341,7 +1435,7 @@ class WebGUIApp:
         return (
             '<article class="panel card">'
             '<h2>抽出オプション</h2>'
-            '<p class="desc">元 lang を取得する時だけ必要です。普段は何も触らなくて大丈夫です。</p>'
+            '<p class="desc">元 lang を取得する時だけ必要です。普段は何も触らなくて大丈夫です。file モードでは常に JSON ファイル保存のみを行い、クリップボードには入れません。</p>'
             '<div class="section-grid">'
             '<div class="field"><label for="extract_output">保存先ファイル</label>'
             '<div class="path-row"><input id="extract_output" type="text">'
@@ -1353,10 +1447,28 @@ class WebGUIApp:
             '</div></article>'
         )
 
-    def save_uploaded_input_file(self, filename: str, file_obj: Any) -> str:
-        safe_name = Path(filename or "uploaded_mod.jar").name
+    def render_file_mode_inputs(self) -> str:
+        return (
+            '<article id="file-mode-card" class="panel card" hidden>'
+            '<h2>file モード入力</h2>'
+            '<p class="desc">翻訳済み JSON / TXT のファイル一覧か、直接貼り付けテキストを使います。1 ファイルに複数 mod 分の辞書が入っていても自動で探索します。</p>'
+            '<div class="section-grid">'
+            '<div class="field"><label for="file_mode__translation_files_text">翻訳ファイル一覧</label>'
+            '<div class="button-row"><button class="secondary picker-button" data-nonblocking="1" type="button" onclick="pickPath(\'translation_files\', \'file_mode__translation_files_text\')">ファイルを追加</button></div>'
+            '<textarea id="file_mode__translation_files_text" placeholder="/path/to/mod_a.json&#10;/path/to/mod_bundle.txt"></textarea>'
+            '<div class="hint">1 行 1 ファイル。JSON / TXT 以外でもテキストとして読めれば解析を試みます。</div>'
+            '</div>'
+            '<div class="field"><label for="file_mode__inline_translation_text">直接入力テキスト</label>'
+            '<textarea id="file_mode__inline_translation_text" placeholder="{&#10;  &quot;mod_a&quot;: {&#10;    &quot;item.example.name&quot;: &quot;例のアイテム&quot;&#10;  }&#10;}"></textarea>'
+            '<div class="hint">翻訳済み JSON をそのまま貼るか、複数の JSON ブロックをまとめて貼り付けられます。</div>'
+            '</div>'
+            '</div></article>'
+        )
+
+    def save_uploaded_temp_file(self, filename: str, file_obj: Any, fallback_name: str = "uploaded_mod.jar") -> str:
+        safe_name = Path(filename or fallback_name).name
         if not safe_name:
-            safe_name = "uploaded_mod.jar"
+            safe_name = fallback_name
         target = Path(self.upload_temp_dir.name) / safe_name
         stem = target.stem
         suffix = target.suffix
@@ -1366,8 +1478,17 @@ class WebGUIApp:
             counter += 1
         with target.open("wb") as f:
             shutil.copyfileobj(file_obj, f)
-        self.add_queue_path(str(target), "upload")
-        self.set_status("入力ファイルをキューへ追加しました")
+        return str(target)
+
+    def save_uploaded_input_file(self, filename: str, file_obj: Any, queue_enabled: bool = True) -> str:
+        target = self.save_uploaded_temp_file(filename, file_obj, "uploaded_mod.jar")
+        if queue_enabled:
+            self.add_queue_path(str(target), "upload")
+            self.set_status("入力ファイルをキューへ追加しました")
+        else:
+            self.set_selected_input_path(str(target))
+            self.set_status("入力ファイルを設定しました")
+            self.append_log(f"[INFO] 入力更新: {target}\n", "stdout")
         return str(target)
 
     def choose_path(self, kind: str) -> tuple[bool, str, str | None, str | None]:
@@ -1384,6 +1505,9 @@ class WebGUIApp:
                 path = self.pick_folder("解凍済み mod フォルダをキューへ追加")
                 self.add_queue_path(path, "picker")
                 return True, "入力フォルダをキューへ追加しました。", path, "queue_only"
+            if kind == "translation_files":
+                path = self.pick_files("翻訳ファイルを選ぶ", "JSON / Text (*.json;*.txt;*.lang)|*.json;*.txt;*.lang|All files (*.*)|*.*")
+                return True, "翻訳ファイルを追加しました。", path, "file_mode__translation_files_text"
             if kind == "output_dir":
                 path = self.pick_folder("出力フォルダを選ぶ")
                 return True, "出力フォルダを選択しました。", path, "general__output_dir"
@@ -1414,6 +1538,32 @@ class WebGUIApp:
             )
             return self.run_windows_powershell(script)
         raise RuntimeError("この OS ではファイル選択ダイアログ未対応です。パスを直接入力してください。")
+
+    def pick_files(self, prompt: str, filter_spec: str) -> str:
+        if sys.platform == "darwin":
+            script = (
+                f'set chosen to choose file with prompt "{self.escape_applescript(prompt)}" with multiple selections allowed\n'
+                'set output to {}\n'
+                'repeat with itemRef in chosen\n'
+                'copy POSIX path of itemRef to end of output\n'
+                'end repeat\n'
+                'set AppleScript\'s text item delimiters to linefeed\n'
+                'return output as text'
+            )
+            return self.run_macos_osascript(script)
+        if sys.platform.startswith("win"):
+            script = (
+                "Add-Type -AssemblyName System.Windows.Forms;"
+                "$dialog = New-Object System.Windows.Forms.OpenFileDialog;"
+                f"$dialog.Title = '{self.escape_powershell(prompt)}';"
+                f"$dialog.Filter = '{self.escape_powershell(filter_spec)}';"
+                "$dialog.Multiselect = $true;"
+                "if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {"
+                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;"
+                "$dialog.FileNames -join \"`n\" }"
+            )
+            return self.run_windows_powershell(script)
+        raise RuntimeError("この OS では複数ファイル選択ダイアログ未対応です。パスを直接入力してください。")
 
     def pick_folder(self, prompt: str) -> str:
         if sys.platform == "darwin":
@@ -1580,11 +1730,13 @@ class WebGUIApp:
                 config = self.collect_config(payload)
                 self.update_extract_state(payload)
                 self.save_config_file(config)
+                mode = self.get_translation_mode(config)
                 single_argv = self.build_runtime_argv(config, [], payload)
                 self.run_action_in_background(
                     "リソースパック生成",
                     lambda input_path, _multiple, _index: self.build_runtime_argv_for_input(input_path),
                     single_argv,
+                    allow_queue=(mode != "clipboard"),
                 )
                 return {"ok": True, "message": "リソースパック生成を開始しました。", "config": self.config_data, "extract": self.extract_state, "ui": {"selected_input_path": self.selected_input_path}}
 
@@ -1592,11 +1744,13 @@ class WebGUIApp:
                 config = self.collect_config(payload)
                 self.update_extract_state(payload)
                 self.save_config_file(config)
+                mode = self.get_translation_mode(config)
                 single_argv = self.build_extract_argv(config, payload)
                 self.run_action_in_background(
                     "元 lang 抽出",
                     lambda input_path, multiple, index: self.build_extract_argv_for_input(input_path, multiple, index),
                     single_argv,
+                    allow_queue=(mode != "clipboard"),
                 )
                 return {"ok": True, "message": "元 lang 抽出を開始しました。", "config": self.config_data, "extract": self.extract_state, "ui": {"selected_input_path": self.selected_input_path}}
 
@@ -1702,11 +1856,14 @@ def launch_web_gui_app(core: Any, script_dir: Path | None = None, config_path: P
             if not valid_items:
                 return False, "アップロードされたファイルが見つかりませんでした。", None
 
+            queue_enabled = str(form.getfirst("queue_enabled", "1") or "1").strip() not in ("0", "false", "False")
             try:
-                saved_paths = [app.save_uploaded_input_file(item.filename, item.file) for item in valid_items]
+                saved_paths = [app.save_uploaded_input_file(item.filename, item.file, queue_enabled=queue_enabled) for item in valid_items]
             except Exception as e:
                 return False, str(e), None
-            return True, f"{len(saved_paths)} 件の入力をキューへ追加しました。", saved_paths[-1]
+            if queue_enabled:
+                return True, f"{len(saved_paths)} 件の入力をキューへ追加しました。", saved_paths[-1]
+            return True, "入力ファイルを設定しました。", saved_paths[-1]
 
         def read_json(self) -> dict[str, Any]:
             length = int(self.headers.get("Content-Length", "0") or "0")
