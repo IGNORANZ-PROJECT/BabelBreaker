@@ -175,6 +175,7 @@ BabelBreaker/
 - 同じ原文には同じ訳語を優先する
 - mod の世界観、口調、固有名詞を守る方向でプロンプトを作る
 - アニメやゲーム原作 mod では既存作品の用語を優先させやすい
+- 既に `target_locale` が mod に入っている場合は、既定で抽出や生成を中止する
 
 AI モードでは、次の設定が重要です。
 
@@ -326,6 +327,7 @@ output_dir = "_babel_breaker_output"
 [translation]
 mode = "clipboard"
 target_locale = "ja_jp"
+cancel_if_target_locale_exists = true
 target_language_name = "Japanese (日本語)"
 enforce_consistent_terms = true
 custom_prompt = ""

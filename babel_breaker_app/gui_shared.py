@@ -13,6 +13,7 @@ FIELD_SPECS = {
     "translation": [
         ("mode", "翻訳モード", "str"),
         ("target_locale", "出力 locale", "str"),
+        ("cancel_if_target_locale_exists", "目的 locale 済みなら中止", "bool"),
         ("target_language_name", "翻訳先言語名", "str"),
         ("source_locale_priority", "元 locale 優先順", "list"),
         ("chunk_size", "1回の翻訳キー数", "int"),

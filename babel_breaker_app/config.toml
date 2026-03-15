@@ -49,7 +49,7 @@
 #
 # 空文字の場合:
 # 1. 実行時の引数が優先されます
-# 2. それも無い場合、スクリプトと同じ場所の input/ を自動探索します
+# 2. それも無い場合、project ルートの input/ を自動探索します
 input_path = ""
 
 # 出力先フォルダです。
@@ -74,6 +74,11 @@ mode = "clipboard"
 # target_locale = "fr_fr" -> fr_fr.json
 # target_locale = "de_de" -> de_de.json
 target_locale = "ja_jp"
+
+# mod 側に target_locale の lang が既に入っていた場合は、
+# 抽出や生成をそこで止める安全装置です。
+# すでに公式翻訳や同梱翻訳がある mod を二重に処理しないためのものです。
+cancel_if_target_locale_exists = true
 
 # AI に説明するための人間向けの言語名です。
 # 分かりやすく書いておくと翻訳の安定性が少し上がります。

@@ -193,6 +193,11 @@ mode = "clipboard"
 # target_locale = "de_de" -> de_de.json
 target_locale = "ja_jp"
 
+# mod 側に target_locale の lang が既に入っていた場合は、
+# 抽出や生成をそこで止める安全装置です。
+# すでに公式翻訳や同梱翻訳がある mod を二重に処理しないためのものです。
+cancel_if_target_locale_exists = true
+
 # AI に説明するための人間向けの言語名です。
 # 分かりやすく書いておくと翻訳の安定性が少し上がります。
 #
@@ -435,6 +440,7 @@ CONFIG_KEY_ORDER = {
     "translation": [
         "mode",
         "target_locale",
+        "cancel_if_target_locale_exists",
         "target_language_name",
         "source_locale_priority",
         "chunk_size",
@@ -515,6 +521,16 @@ class ClipboardSourceAutoFetched(Exception):
         self.reason = reason
         self.result = result
         self.clipboard_method = clipboard_method
+
+
+class TargetLocaleAlreadyExists(Exception):
+    def __init__(self, target_locale: str, source: LangSource, action_label: str):
+        self.target_locale = target_locale
+        self.source = source
+        self.action_label = action_label
+        super().__init__(
+            f"mod には既に {target_locale}.json があるため、{action_label} をキャンセルしました: {source.path}"
+        )
 
 
 def eprint(*args: object) -> None:
@@ -1483,6 +1499,39 @@ def extract_lang_json_result(mod_root: Path, preferred_namespace: str | None, lo
     )
 
 
+def find_lang_source_for_locale(
+    sources: list[LangSource],
+    target_locale: str,
+    preferred_namespace: str | None = None,
+) -> LangSource | None:
+    wanted_locale = target_locale.strip().lower()
+    if not wanted_locale:
+        return None
+
+    candidates = [src for src in sources if src.locale == wanted_locale]
+    if preferred_namespace:
+        candidates = [src for src in candidates if src.namespace == preferred_namespace]
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda src: (0 if src.ext == ".json" else 1, str(src.path)))[0]
+
+
+def maybe_cancel_if_target_locale_exists(
+    mod_root: Path,
+    preferred_namespace: str | None,
+    config: dict[str, Any],
+    action_label: str,
+) -> None:
+    translation = get_section(config, "translation")
+    if not cfg_bool(translation, "cancel_if_target_locale_exists", True):
+        return
+
+    target_locale = cfg_str(translation, "target_locale", "ja_jp")
+    source = find_lang_source_for_locale(discover_lang_sources(mod_root), target_locale, preferred_namespace)
+    if source is not None:
+        raise TargetLocaleAlreadyExists(target_locale.lower(), source, action_label)
+
+
 PLACEHOLDER_PATTERN = re.compile(
     r"%\d*\$?[sdiffoxXeEgGaAcbhnt%]"
     r"|\{[0-9]+\}"
@@ -2309,6 +2358,7 @@ def create_resource_pack(ctx: RuntimeContext, original_input_path: Path, mod_roo
 
     target_locale = cfg_str(translation, "target_locale", "ja_jp")
     mod_info = detect_mod_info(mod_root)
+    maybe_cancel_if_target_locale_exists(mod_root, mod_info.mod_id, ctx.config, "リソースパック生成")
 
     if mod_info.mod_version in ("", "unknown", "${file.jarVersion}"):
         guessed_name, guessed_ver, guessed_mc = guess_from_folder_name(original_input_path if original_input_path.is_dir() else mod_root)
@@ -2380,10 +2430,14 @@ def run_extract_mode(ctx: RuntimeContext, cli_input_path: str | None, args: argp
         try:
             locale_priority = normalize_locale_priority(args.extract_locale)
             preferred_namespace = choose_namespace_for_extraction(mod_root, args.extract_namespace.strip() or None)
+            maybe_cancel_if_target_locale_exists(mod_root, preferred_namespace, ctx.config, "元 lang 抽出")
             result = extract_lang_json_result(mod_root, preferred_namespace, locale_priority)
         finally:
             if temp_dir is not None:
                 temp_dir.cleanup()
+    except TargetLocaleAlreadyExists as e:
+        print(f"[INFO] {e}")
+        return 0
     except Exception as e:
         eprint(f"[ERROR] {e}")
         return 1
@@ -2526,6 +2580,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[INFO] locale: {e.result.source.locale}")
         print(f"[INFO] クリップボード: {e.clipboard_method}")
         print("[INFO] この JSON の値だけ翻訳して、もう一度実行してください。")
+        return 0
+    except TargetLocaleAlreadyExists as e:
+        print(f"[INFO] {e}")
         return 0
     except Exception as e:
         eprint(f"[ERROR] {e}")

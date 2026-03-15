@@ -63,6 +63,7 @@ SECTION_DESCRIPTIONS = {
 }
 
 FIELD_HELP = {
+    ("translation", "cancel_if_target_locale_exists"): "mod に目的 locale が既に含まれていたら、抽出や生成を安全に中止します。",
     ("translation", "custom_prompt"): "作品用語、口調、公式訳優先ルールなどを自由に書けます。",
     ("translation", "source_locale_priority"): "カンマ区切りで入力します。例: en_us, en_gb",
     ("api", "api_key_direct"): "必要な場合だけ使ってください。通常は環境変数推奨です。",
@@ -981,6 +982,30 @@ class WebGUIApp:
       el.className = `flash ${{kind}}`.trim();
     }}
 
+    function normalizeNotice(text) {{
+      return String(text || '').trim().replace(/[。.!！?？\\s]+$/u, '');
+    }}
+
+    function showResultFlash(result, state) {{
+      const message = result && result.message ? String(result.message) : '';
+      if (!message) {{
+        setFlash('');
+        return;
+      }}
+      const sameAsStatus = Boolean(
+        result &&
+        result.ok &&
+        state &&
+        normalizeNotice(message) &&
+        normalizeNotice(message) === normalizeNotice(state.status || '')
+      );
+      if (sameAsStatus) {{
+        setFlash('');
+        return;
+      }}
+      setFlash(message, result && result.ok ? 'ok' : 'error');
+    }}
+
     function updateQuickSummary() {{
       const mode = document.getElementById(fieldId('translation', 'mode')).value || 'clipboard';
       const locale = document.getElementById(fieldId('translation', 'target_locale')).value || 'ja_jp';
@@ -1105,8 +1130,8 @@ class WebGUIApp:
       if (result.config) applyConfig(result.config);
       if (result.extract) applyExtract(result.extract);
       if (result.ui) applyUi(result.ui);
-      await refreshState();
-      setFlash(result.message || '', result.ok ? 'ok' : 'error');
+      const state = await refreshState();
+      showResultFlash(result, state);
       if (action === 'shutdown' && result.ok) {{
         window.setTimeout(() => window.close(), 400);
       }}
@@ -1115,8 +1140,8 @@ class WebGUIApp:
     async function removeQueueItem(itemId) {{
       const result = await postJson('/api/action', {{ action: 'remove_queue_item', item_id: itemId, ...collectPayload() }});
       if (result.ui) applyUi(result.ui);
-      await refreshState();
-      setFlash(result.message || '', result.ok ? 'ok' : 'error');
+      const state = await refreshState();
+      showResultFlash(result, state);
     }}
 
     async function pickPath(kind, targetField='') {{
@@ -1148,8 +1173,8 @@ class WebGUIApp:
       }});
       const result = await response.json();
       if (result.ok) {{
-        await refreshState();
-        setFlash(result.message || '入力ファイルを受け取りました。', 'ok');
+        const state = await refreshState();
+        showResultFlash(result, state);
       }} else {{
         setFlash(result.message || 'ファイルの取込に失敗しました。', 'error');
       }}
@@ -1185,6 +1210,7 @@ class WebGUIApp:
         if (button.dataset.nonblocking === '1') return;
         button.disabled = Boolean(state.running);
       }});
+      return state;
     }}
 
     async function copyLog() {{
