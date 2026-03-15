@@ -647,12 +647,23 @@ class WebGUIApp:
       display: grid;
       gap: 12px;
     }}
+    .queue-panel > summary {{
+      list-style: none;
+      cursor: pointer;
+    }}
+    .queue-panel > summary::-webkit-details-marker {{
+      display: none;
+    }}
     .queue-header {{
       display: flex;
       justify-content: space-between;
       gap: 10px;
       align-items: center;
       flex-wrap: wrap;
+    }}
+    .queue-body {{
+      display: grid;
+      gap: 12px;
     }}
     .queue-count {{
       font-size: 0.92rem;
@@ -895,17 +906,22 @@ class WebGUIApp:
             </div>
           </div>
 
-          <div class="queue-panel">
-            <div class="queue-header">
+          <details class="queue-panel" open>
+            <summary class="queue-header">
               <div>
                 <div class="selected-label">処理キュー</div>
                 <div id="queue-count" class="queue-count">0 件</div>
               </div>
-              <button class="ghost" data-nonblocking="1" type="button" onclick="runAction('clear_queue')">全削除</button>
+              <span class="hint">開く / 閉じる</span>
+            </summary>
+            <div class="queue-body">
+              <div class="button-row">
+                <button class="ghost" data-nonblocking="1" type="button" onclick="runAction('clear_queue')">全削除</button>
+              </div>
+              <div id="queue-list" class="queue-list"></div>
+              <input id="selected_input_path" type="hidden">
             </div>
-            <div id="queue-list" class="queue-list"></div>
-            <input id="selected_input_path" type="hidden">
-          </div>
+          </details>
 
           <div class="mode-card">
             <div>
