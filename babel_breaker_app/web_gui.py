@@ -128,6 +128,9 @@ class WebGUIApp:
         self.queue_serial = 0
         self.queue_items: list[dict[str, str]] = []
         self.current_job: dict[str, str] | None = None
+        self.progress_action = ""
+        self.progress_completed = 0
+        self.progress_failures = 0
         self.extract_state = {
             "extract_output": "",
             "extract_locale": ", ".join(self.config_data.get("translation", {}).get("source_locale_priority", ["en_us", "en_gb"])),
@@ -157,6 +160,8 @@ class WebGUIApp:
 
     def get_state(self) -> dict[str, Any]:
         with self.lock:
+            pending = len(self.queue_items) + (1 if self.current_job else 0)
+            total = self.progress_completed + pending
             return {
                 "status": self.status,
                 "running": self.worker is not None and self.worker.is_alive(),
@@ -165,7 +170,31 @@ class WebGUIApp:
                 "selected_input_path": self.selected_input_path,
                 "queue_items": [dict(item) for item in self.queue_items],
                 "current_job": dict(self.current_job) if self.current_job else None,
+                "progress": {
+                    "action": self.progress_action,
+                    "completed": self.progress_completed,
+                    "total": total,
+                    "failures": self.progress_failures,
+                },
             }
+
+    def reset_progress(self, action_name: str) -> None:
+        with self.lock:
+            self.progress_action = action_name
+            self.progress_completed = 0
+            self.progress_failures = 0
+            self.log_revision += 1
+
+    def update_progress(self, completed: int, failures: int) -> None:
+        with self.lock:
+            self.progress_completed = max(completed, 0)
+            self.progress_failures = max(failures, 0)
+            self.log_revision += 1
+
+    def set_current_job_item(self, item: dict[str, str] | None) -> None:
+        with self.lock:
+            self.current_job = dict(item) if item else None
+            self.log_revision += 1
 
     def set_selected_input_path(self, path: str) -> None:
         with self.lock:
@@ -224,9 +253,24 @@ class WebGUIApp:
             return item
 
     def clear_current_job(self) -> None:
-        with self.lock:
-            self.current_job = None
-            self.log_revision += 1
+        self.set_current_job_item(None)
+
+    @staticmethod
+    def build_runtime_job_item(action_name: str, argv: list[str]) -> dict[str, str]:
+        for token in reversed(argv):
+            if isinstance(token, str) and token and not token.startswith("-"):
+                return {
+                    "id": "single",
+                    "path": token,
+                    "label": Path(token).name or token,
+                    "source": "runtime",
+                }
+        return {
+            "id": "single",
+            "path": "",
+            "label": action_name,
+            "source": "runtime",
+        }
 
     def get_effective_input_path(self, config: dict[str, Any], payload: dict[str, Any] | None = None) -> str:
         if payload is not None:
@@ -400,6 +444,7 @@ class WebGUIApp:
             self.status = f"{action_name} を実行中..."
             self.log_text += f"\n===== {action_name} =====\n"
             self.log_revision += 1
+        self.reset_progress(action_name)
 
         def worker() -> None:
             stdout_writer = MemoryWriter(self, "stdout")
@@ -421,18 +466,23 @@ class WebGUIApp:
                             code = self.core.main(argv)
                             if code != 0:
                                 failures += 1
+                            self.update_progress(processed, failures)
                             self.clear_current_job()
                     else:
                         if not allow_queue and self.queue_items:
                             print("[INFO] clipboard モードではキューを使わないため、現在の入力だけ処理します。")
                         argv = single_argv or []
+                        self.set_current_job_item(self.build_runtime_job_item(action_name, argv))
                         print(f"[INFO] 実行引数: {' '.join(argv) if argv else '(babel_breaker_app/config.toml の設定のみ)'}")
                         code = self.core.main(argv)
                         processed = 1
                         if code != 0:
                             failures += 1
+                        self.update_progress(processed, failures)
+                        self.clear_current_job()
             except Exception as e:
                 self.append_log(f"[ERROR] GUI 実行中に例外が発生しました: {e}\n", "stderr")
+                self.update_progress(processed, max(failures, 1 if processed == 0 else failures))
                 self.clear_current_job()
                 self.set_status(f"{action_name} が失敗しました")
                 return
@@ -871,6 +921,51 @@ class WebGUIApp:
     .flash.ok {{
       color: var(--accent);
     }}
+    .progress-wrap {{
+      margin-top: 14px;
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: rgba(13,107,95,0.05);
+      border: 1px solid rgba(13,107,95,0.14);
+      display: grid;
+      gap: 8px;
+    }}
+    .progress-head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: baseline;
+      flex-wrap: wrap;
+    }}
+    .progress-label {{
+      font-weight: 800;
+    }}
+    .progress-count {{
+      font-size: 0.92rem;
+      color: var(--muted);
+    }}
+    .progress-bar {{
+      width: 100%;
+      height: 12px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: rgba(22,50,79,0.10);
+    }}
+    .progress-fill {{
+      height: 100%;
+      width: 0%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent), #28a88d);
+      transition: width 180ms ease;
+    }}
+    .progress-wrap.done .progress-fill {{
+      background: linear-gradient(90deg, var(--accent-2), #e8b45c);
+    }}
+    .progress-meta {{
+      font-size: 0.9rem;
+      color: var(--muted);
+      line-height: 1.6;
+    }}
     .footer-note {{
       margin-top: 18px;
       display: flex;
@@ -926,6 +1021,14 @@ class WebGUIApp:
         <button class="ghost" onclick="openTarget('readme')">README</button>
       </div>
       <div id="flash" class="flash"></div>
+      <div id="progress-wrap" class="progress-wrap" hidden>
+        <div class="progress-head">
+          <div id="progress-label" class="progress-label">待機中</div>
+          <div id="progress-count" class="progress-count">0 / 0</div>
+        </div>
+        <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+        <div id="progress-meta" class="progress-meta"></div>
+      </div>
     </section>
 
     <main class="stack">
@@ -1071,6 +1174,42 @@ class WebGUIApp:
         return;
       }}
       setFlash(message, result && result.ok ? 'ok' : 'error');
+    }}
+
+    function renderProgress(state) {{
+      const wrap = document.getElementById('progress-wrap');
+      const label = document.getElementById('progress-label');
+      const count = document.getElementById('progress-count');
+      const fill = document.getElementById('progress-fill');
+      const meta = document.getElementById('progress-meta');
+      if (!wrap || !label || !count || !fill || !meta) return;
+      const progress = (state && state.progress) || {{}};
+      const total = Number(progress.total || 0);
+      const completed = Number(progress.completed || 0);
+      const failures = Number(progress.failures || 0);
+      const running = Boolean(state && state.running);
+      const action = String(progress.action || '');
+      const currentLabel = state && state.current_job ? String(state.current_job.label || state.current_job.path || '') : '';
+      if (!action || total <= 0) {{
+        wrap.hidden = true;
+        fill.style.width = '0%';
+        return;
+      }}
+      const percent = Math.max(0, Math.min(100, total ? (completed / total) * 100 : 0));
+      wrap.hidden = false;
+      wrap.classList.toggle('done', !running && completed >= total);
+      label.textContent = running ? `${{action}} を実行中` : `${{action}} 完了`;
+      count.textContent = `${{completed}} / ${{total}}`;
+      fill.style.width = `${{percent}}%`;
+      if (running && currentLabel) {{
+        meta.textContent = failures > 0 ? `現在: ${{currentLabel}} / 失敗 ${{failures}} 件` : `現在: ${{currentLabel}}`;
+      }} else if (failures > 0) {{
+        meta.textContent = `失敗 ${{failures}} 件`;
+      }} else if (running) {{
+        meta.textContent = '処理中です。ログも確認できます。';
+      }} else {{
+        meta.textContent = '完了しました。';
+      }}
     }}
 
     function updateQuickSummary() {{
@@ -1328,6 +1467,7 @@ class WebGUIApp:
       document.getElementById('status-pill').textContent = state.status;
       queueItems = state.queue_items || [];
       currentJob = state.current_job || null;
+      renderProgress(state);
       if ((state.selected_input_path || '') !== (selectedInputPath || '')) {{
         selectedInputPath = state.selected_input_path || '';
         updateQuickSummary();
