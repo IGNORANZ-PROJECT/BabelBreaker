@@ -25,6 +25,9 @@ try:
 except ImportError:
     from gui_shared import API_STYLE_OPTIONS, FIELD_SPECS, TRANSLATION_MODE_OPTIONS
 
+X_URL = "https://x.com/IGNORANZ_P"
+GITHUB_URL = "https://github.com/IGNORANZ-PROJECT/BabelBreaker"
+
 
 def detect_project_root() -> Path:
     current = Path(__file__).resolve().parent
@@ -868,6 +871,26 @@ class WebGUIApp:
     .flash.ok {{
       color: var(--accent);
     }}
+    .footer-note {{
+      margin-top: 18px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 14px;
+      font-size: 0.92rem;
+      color: var(--muted);
+    }}
+    .footer-link {{
+      color: inherit;
+      text-decoration: none;
+      border-bottom: 1px solid rgba(22,50,79,0.18);
+      padding-bottom: 1px;
+      transition: color 120ms ease, border-color 120ms ease;
+    }}
+    .footer-link:hover {{
+      color: var(--ink);
+      border-bottom-color: rgba(22,50,79,0.42);
+    }}
     @media (max-width: 760px) {{
       .topbar {{
         flex-direction: column;
@@ -997,6 +1020,10 @@ class WebGUIApp:
         </div>
       </details>
     </main>
+    <div class="footer-note">
+      <a class="footer-link" href="{html.escape(X_URL)}" target="_blank" rel="noopener noreferrer">© IGNORANZ PROJECT</a>
+      <a class="footer-link" href="{html.escape(GITHUB_URL)}" target="_blank" rel="noopener noreferrer">GitHub</a>
+    </div>
   </div>
 
   <script>

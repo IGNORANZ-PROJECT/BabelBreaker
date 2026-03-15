@@ -116,6 +116,8 @@ BabelBreaker/
   出力フォルダを開きます
 - `README を開く`
   この説明を開きます
+- 画面下部の `© IGNORANZ PROJECT` / `GitHub`
+  X と GitHub リポジトリを開きます
 
 ### 詳細設定に入っているもの
 
