@@ -13,18 +13,18 @@ Babel Breaker
 ------------------------------------------------------------
 
 1. 最初の準備
-   - このファイルと同じ場所に config.toml を置く
-   - icon.png を置く（無くても動くが pack.png は付かない）
+   - `babel_breaker_app/config.toml` を調整する
+   - 必要なら babel_breaker_app/assets/ 内の画像を差し替える
    - 必要なら API キーを環境変数に入れる
 
 2. いちばん簡単な実行
-   python3 babel_breaker.py
+   python3 -m babel_breaker_app
 
 3. jar を直接指定
-   python3 babel_breaker.py "/path/to/mod.jar"
+   python3 -m babel_breaker_app "/path/to/mod.jar"
 
 4. 解凍済みフォルダを指定
-   python3 babel_breaker.py "/path/to/unpacked_mod"
+   python3 -m babel_breaker_app "/path/to/unpacked_mod"
 
 ------------------------------------------------------------
 モード
@@ -59,7 +59,7 @@ Minecraft の lang JSON は
 ------------------------------------------------------------
 
 - Python 3.10 以上推奨
-- config.toml
+- babel_breaker_app/config.toml
 - 入力 mod（jar のままでも、解凍済みでも可）
 
 AI モードで追加:
@@ -76,6 +76,7 @@ AI モードで追加:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -99,6 +100,22 @@ except ImportError:
         tomllib = None
 
 
+def detect_project_root() -> Path:
+    current = Path(__file__).resolve().parent
+    for candidate in (current, *current.parents):
+        if (candidate / "launch_gui.command").exists() and (candidate / "README.md").exists():
+            return candidate
+    return current
+
+
+def get_assets_dir(script_dir: Path) -> Path:
+    return script_dir / "babel_breaker_app" / "assets"
+
+
+def get_config_path(script_dir: Path) -> Path:
+    return script_dir / "babel_breaker_app" / "config.toml"
+
+
 CONFIG_TEMPLATE = r'''# ============================================================
 # Babel Breaker 設定ファイル
 # ============================================================
@@ -106,56 +123,284 @@ CONFIG_TEMPLATE = r'''# ========================================================
 # これは Minecraft mod の lang ファイルを翻訳し、
 # resourcepacks に入れられる ZIP を自動生成するための設定です。
 #
-# 使い方:
-#   1. 必要なところだけ書き換える
-#   2. 保存する
-#   3. python3 babel_breaker.py を実行する
+# このファイルは TOML 形式です。
+# 行頭の # はコメントなので、自由に読んで大丈夫です。
 #
-# まず困ったら:
-#   - translation.mode を "ai" にするか "clipboard" にするか確認
-#   - api.style / api_key_env を確認
-#   - general.input_path を入れるか、実行時に jar を渡す
+# ------------------------------------------------------------
+# まず最初にやること
+# ------------------------------------------------------------
+# 1. このファイルを保存する
+# 2. 必要なら API キーを環境変数に入れる
+# 3. 必要なら babel_breaker_app/assets/icon.png を差し替える
+#    （無くても動きますが、pack.png は付きません）
+# 4. project ルートで python3 -m babel_breaker_app を実行する
+#
+# ------------------------------------------------------------
+# 実行方法
+# ------------------------------------------------------------
+#
+# いちばん簡単:
+#   python3 -m babel_breaker_app
+#
+# jar を直接指定:
+#   python3 -m babel_breaker_app "/path/to/mod.jar"
+#
+# 解凍済みフォルダを指定:
+#   python3 -m babel_breaker_app "/path/to/unpacked_mod"
+#
+# 元 lang JSON を取り出したい時:
+#   python3 -m babel_breaker_app --extract-lang "/path/to/mod.jar"
+#
+# この `babel_breaker_app/config.toml` で普段の設定を固定しておけば、
+# 実行時に毎回たくさん指定する必要はありません。
+#
 # ============================================================
 
+
 [general]
+# 入力元のパスです。
+# ここに .jar のパス、または解凍済み mod フォルダのパスを書けます。
+#
+# 例:
+# input_path = "/Users/you/Downloads/SomeMod-1.20.1.jar"
+# input_path = "/Users/you/work/SomeMod_unpacked"
+#
+# 空文字の場合:
+# 1. 実行時の引数が優先されます
+# 2. それも無い場合、project ルートの input/ を自動探索します
 input_path = ""
+
+# 出力先フォルダです。
+# ZIP や、必要なら展開フォルダがここに出ます。
 output_dir = "_babel_breaker_output"
-verbose = true
+
+# 一時フォルダなどの途中経過を詳しく表示したい場合は true
+verbose = false
+
 
 [translation]
-mode = "ai"
+# 翻訳モード:
+# "clipboard" = すでに翻訳済み JSON をクリップボードから読む
+# "ai"        = 元の lang ファイルを見つけて AI で自動翻訳する
+mode = "clipboard"
+
+# 出力先 locale です。
+# これが最終的なファイル名にも使われます。
+#
+# 例:
+# target_locale = "ja_jp" -> ja_jp.json
+# target_locale = "fr_fr" -> fr_fr.json
+# target_locale = "de_de" -> de_de.json
 target_locale = "ja_jp"
+
+# AI に説明するための人間向けの言語名です。
+# 分かりやすく書いておくと翻訳の安定性が少し上がります。
+#
+# 例:
+# "Japanese (日本語)"
+# "French (Français)"
+# "German (Deutsch)"
 target_language_name = "Japanese (日本語)"
+
+# AI が元の lang を探すとき、どの locale を優先するかです。
+# 通常は英語が元なのでこのままで大丈夫です。
 source_locale_priority = ["en_us", "en_gb"]
+
+# 1回の API 呼び出しで翻訳するキー数です。
+# 大きすぎると失敗しやすく、小さすぎると遅くなります。
+# まずは 80〜150 くらいが無難です。
 chunk_size = 120
+
+# プレースホルダが壊れた行を原文に戻す安全装置
+# true 推奨
 repair_broken_placeholders = true
 
+# 同じ原文に対して同じ訳語を使うためのメモリ機能です。
+# true のとき、前のチャンクで確定した同一原文の訳語を次のチャンクでも優先します。
+enforce_consistent_terms = true
+
+# AI へ追加で渡すカスタム指示です。
+# mod ごとの世界観、口調、固有名詞ルールなどを書けます。
+# 空文字なら無効です。
+#
+# 例:
+# custom_prompt = "魔法名はカタカナに統一。敬語は使わない。"
+#
+# 複数行にしたい場合:
+# custom_prompt = """
+# 公式日本語訳がある用語はそれを優先。
+# 主人公陣営の技名は必ずカタカナ表記。
+# UI は短く、会話文は自然な日本語にする。
+# """
+custom_prompt = ""
+
+
 [pack]
+# ZIP は常に作ります
 create_zip = true
+
+# 展開フォルダも残したい場合は true
+# false なら ZIP のみ残します
 keep_folder = false
+
+# pack.png に使うアイコンのパスです。
+# 空なら次の順で探します:
+# 1. babel_breaker_app/assets/icon.png
+# 2. project ルートの icon.png
+# 3. icon.webp / icon.jpg / icon.jpeg / icon.bmp / icon.tif / icon.tiff
+#
+# 無くても pack は動きますが、見た目アイコンが付きません。
 icon_path = ""
+
+# パック名テンプレート
+# 使える変数:
+# {app_name}
+# {mod_name}
+# {mod_version}
+# {mod_id}
+# {target_locale}
 pack_name_template = "{app_name}_{mod_name}_{mod_version}_{target_locale}"
+
+# pack.mcmeta の description
+# 使える変数:
+# {app_name}
+# {mod_name}
+# {mod_version}
+# {mod_id}
+# {target_locale}
+# {mc_version_expr}
 description_template = "{app_name} | {mod_name} {mod_version} -> {target_locale} | MC {mc_version_expr}"
 
+
 [minecraft]
+# 空なら mod 側の情報から自動推定します
+# 手動で固定したい場合だけ使ってください
+#
+# 例:
+# mc_version = "1.20.1"
+# mc_version = "1.20.x"
+# mc_version = "1.21"
 mc_version = ""
 
+
 [api]
+# 使う API スタイルです。
+# 使える値:
+#
+# "gemini_generate_content"
+#   Google Gemini ネイティブ API
+#
+# "gemini_openai_chat"
+#   Gemini の OpenAI 互換 Chat Completions
+#
+# "openai_responses"
+#   OpenAI Responses API
+#
+# "openai_chat_completions"
+#   OpenAI Chat Completions API
+#
+# "anthropic_messages"
+#   Anthropic Messages API
+#
+# "openai_compatible_chat"
+#   OpenAI 互換の Chat Completions 形式 API
+#
+# "openai_compatible_responses"
+#   OpenAI 互換の Responses 形式 API
 style = "gemini_generate_content"
+
+# モデル名
+# Gemini 例:
+# model = "gemini-2.5-flash"
+#
+# OpenAI 例:
+# model = "gpt-5.4"
+#
+# Anthropic 例:
+# model = "claude-sonnet-4-5"
 model = "gemini-2.5-flash"
+
+# API URL
+# 空にすると、style に応じた安全な既定値を自動で使います。
+#
+# 例:
+# Gemini native:
+#   https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
+#
+# Gemini OpenAI compat:
+#   https://generativelanguage.googleapis.com/v1beta/openai/chat/completions
+#
+# OpenAI Responses:
+#   https://api.openai.com/v1/responses
+#
+# OpenAI Chat:
+#   https://api.openai.com/v1/chat/completions
+#
+# Anthropic:
+#   https://api.anthropic.com/v1/messages
 url = ""
+
+# API キーを読む環境変数名
+#
+# 例:
+# Gemini   -> GEMINI_API_KEY
+# OpenAI   -> OPENAI_API_KEY
+# Anthropic-> ANTHROPIC_API_KEY
 api_key_env = "GEMINI_API_KEY"
+
+# どうしても直書きしたい場合だけ使ってください。
+# 通常は空のままで、環境変数を使う方が安全です。
 api_key_direct = ""
+
+# タイムアウト秒
 timeout = 180
+
+# 温度
+# 翻訳用途では低めが無難です
 temperature = 0.2
+
+# 最大出力トークン
 max_output_tokens = 8192
+
+# Anthropic 用バージョンヘッダ
 anthropic_version = "2023-06-01"
 
+
 [clipboard]
+# translation.mode = "clipboard" の時だけ使います。
+# ここは説明用セクションです。
+#
+# 使い方:
+# 0. 必要なら `python3 -m babel_breaker_app --extract-lang ...` で元 lang JSON を取り出す
+# 1. 翻訳済み JSON 本文をコピー
+# 2. python3 -m babel_breaker_app
+#
+# JSON の形式はこうです:
+# {
+#   "item.example.name": "例のアイテム",
+#   "block.example.machine": "例の機械"
+# }
+#
+# 注意:
+# - キーは変えない
+# - 値だけ翻訳する
+# - クリップボードにこの mod 用の JSON が無い時は、元 lang JSON を自動で取得できます
 enabled = true
 
+# クリップボードが空、JSON でない、またはキーが合わない時に
+# mod に対応する元 lang JSON を自動でクリップボードへ入れます。
+# 値だけ翻訳して再実行してください。
+auto_fetch_source_when_missing = true
+
+
 [input_scan]
+# general.input_path が空で、実行時引数も無い時だけ使います。
+# このフォルダを自動で探します。
 folder = "input"
+
+# このフォルダ内で、mod として扱えそうな .jar / .zip / フォルダを探します。
+# 空フォルダや無関係なフォルダは無視します。
+# false にすると自動探索しません。
 enabled = true
 '''
 
@@ -166,6 +411,7 @@ DEFAULT_ICON_BASENAME = "icon"
 ICON_EXT_PRIORITY = [".png", ".webp", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"]
 ARCHIVE_EXTENSIONS = (".jar", ".zip")
 LANG_FILE_EXTENSIONS = (".json", ".lang")
+DEFAULT_SOURCE_LOCALE_PRIORITY = ["en_us", "en_gb"]
 MOD_METADATA_PATHS = [
     "fabric.mod.json",
     "quilt.mod.json",
@@ -173,6 +419,51 @@ MOD_METADATA_PATHS = [
     "META-INF/neoforge.mods.toml",
     "META-INF/MANIFEST.MF",
 ]
+
+CONFIG_SECTION_ORDER = [
+    "general",
+    "translation",
+    "pack",
+    "minecraft",
+    "api",
+    "clipboard",
+    "input_scan",
+]
+
+CONFIG_KEY_ORDER = {
+    "general": ["input_path", "output_dir", "verbose"],
+    "translation": [
+        "mode",
+        "target_locale",
+        "target_language_name",
+        "source_locale_priority",
+        "chunk_size",
+        "repair_broken_placeholders",
+        "enforce_consistent_terms",
+        "custom_prompt",
+    ],
+    "pack": [
+        "create_zip",
+        "keep_folder",
+        "icon_path",
+        "pack_name_template",
+        "description_template",
+    ],
+    "minecraft": ["mc_version"],
+    "api": [
+        "style",
+        "model",
+        "url",
+        "api_key_env",
+        "api_key_direct",
+        "timeout",
+        "temperature",
+        "max_output_tokens",
+        "anthropic_version",
+    ],
+    "clipboard": ["enabled", "auto_fetch_source_when_missing"],
+    "input_scan": ["folder", "enabled"],
+}
 
 PACK_FORMAT_RULES = [
     ((1, 20, 0), (1, 20, 1), 15),
@@ -211,6 +502,21 @@ class RuntimeContext:
     verbose: bool
 
 
+@dataclass
+class ExtractLangResult:
+    source: LangSource
+    data: dict[str, str]
+    json_text: str
+
+
+class ClipboardSourceAutoFetched(Exception):
+    def __init__(self, reason: str, result: ExtractLangResult, clipboard_method: str):
+        super().__init__(reason)
+        self.reason = reason
+        self.result = result
+        self.clipboard_method = clipboard_method
+
+
 def eprint(*args: object) -> None:
     print(*args, file=sys.stderr)
 
@@ -234,14 +540,183 @@ def safe_fs_name(text: str) -> str:
 def ensure_config_file(config_path: Path) -> None:
     if config_path.exists():
         return
+    config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(CONFIG_TEMPLATE, encoding="utf-8", newline="\n")
+
+
+def migrate_legacy_root_config(script_dir: Path, config_path: Path) -> Path:
+    legacy_path = script_dir / "config.toml"
+    if config_path.exists() or not legacy_path.exists():
+        return config_path
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(legacy_path), str(config_path))
+    print(f"[INFO] 既存の config.toml を新しい場所へ移動しました: {config_path}")
+    return config_path
+
+
+def strip_toml_inline_comment(text: str) -> str:
+    in_string = False
+    escape = False
+    bracket_depth = 0
+
+    for idx, ch in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "[":
+            bracket_depth += 1
+            continue
+        if ch == "]" and bracket_depth > 0:
+            bracket_depth -= 1
+            continue
+        if ch == "#" and bracket_depth == 0:
+            return text[:idx].rstrip()
+
+    return text.rstrip()
+
+
+def split_toml_array_items(text: str) -> list[str]:
+    items: list[str] = []
+    current: list[str] = []
+    in_string = False
+    escape = False
+    depth = 0
+
+    for ch in text:
+        if in_string:
+            current.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            current.append(ch)
+            continue
+        if ch == "[":
+            depth += 1
+            current.append(ch)
+            continue
+        if ch == "]" and depth > 0:
+            depth -= 1
+            current.append(ch)
+            continue
+        if ch == "," and depth == 0:
+            item = "".join(current).strip()
+            if item:
+                items.append(item)
+            current = []
+            continue
+        current.append(ch)
+
+    tail = "".join(current).strip()
+    if tail:
+        items.append(tail)
+    return items
+
+
+def parse_basic_toml_value(text: str) -> Any:
+    value = strip_toml_inline_comment(text).strip()
+    lowered = value.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if re.fullmatch(r"[+-]?\d+", value):
+        return int(value)
+    if re.fullmatch(r"[+-]?\d+\.\d+", value):
+        return float(value)
+    if value.startswith("[") and value.endswith("]"):
+        inner = value[1:-1].strip()
+        if not inner:
+            return []
+        return [parse_basic_toml_value(item) for item in split_toml_array_items(inner)]
+    if value.startswith('"') and value.endswith('"'):
+        return json.loads(value)
+    raise RuntimeError(f"未対応の TOML 値です: {text}")
+
+
+def simple_toml_loads(text: str) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    current_section: dict[str, Any] | None = None
+    lines = text.splitlines()
+    idx = 0
+
+    while idx < len(lines):
+        raw_line = lines[idx]
+        stripped = raw_line.strip()
+        idx += 1
+
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        section_match = re.fullmatch(r"\[([A-Za-z0-9_]+)\]", stripped)
+        if section_match:
+            section_name = section_match.group(1)
+            current_section = result.setdefault(section_name, {})
+            continue
+
+        key_match = re.fullmatch(r"([A-Za-z0-9_]+)\s*=\s*(.*)", stripped)
+        if not key_match:
+            raise RuntimeError(f"TOML の行を解釈できませんでした: {raw_line}")
+        if current_section is None:
+            raise RuntimeError(f"セクション外の TOML 行です: {raw_line}")
+
+        key = key_match.group(1)
+        value_text = key_match.group(2).rstrip()
+
+        if value_text.startswith('"""'):
+            multiline_head = value_text[3:]
+            collected: list[str] = []
+            if multiline_head.endswith('"""'):
+                current_section[key] = multiline_head[:-3]
+                continue
+
+            if multiline_head:
+                collected.append(multiline_head)
+
+            while idx < len(lines):
+                next_line = lines[idx]
+                idx += 1
+                if next_line.endswith('"""'):
+                    collected.append(next_line[:-3])
+                    break
+                collected.append(next_line)
+            else:
+                raise RuntimeError(f"複数行文字列の終端が見つかりませんでした: {key}")
+
+            current_section[key] = "\n".join(collected)
+            continue
+
+        current_section[key] = parse_basic_toml_value(value_text)
+
+    return result
 
 
 def load_toml(path: Path) -> dict[str, Any]:
     if tomllib is None:
-        raise RuntimeError("Python 3.11+ か tomli が必要です。Python 3.10 の場合は `pip install tomli` を実行してください。")
+        return simple_toml_loads(path.read_text(encoding="utf-8"))
     with path.open("rb") as f:
         return tomllib.load(f)
+
+
+def load_toml_text(text: str) -> dict[str, Any]:
+    if tomllib is None:
+        return simple_toml_loads(text)
+    return tomllib.loads(text)
 
 
 def get_section(config: dict[str, Any], key: str) -> dict[str, Any]:
@@ -280,6 +755,119 @@ def cfg_str_list(section: dict[str, Any], key: str, default: list[str] | None = 
     if isinstance(value, list):
         return [str(v).strip() for v in value if str(v).strip()]
     return default
+
+
+def get_default_config_dict() -> dict[str, Any]:
+    return load_toml_text(CONFIG_TEMPLATE)
+
+
+def merge_config_with_defaults(config: dict[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(get_default_config_dict())
+    for section, values in config.items():
+        if not isinstance(values, dict):
+            merged[section] = values
+            continue
+        target = merged.setdefault(section, {})
+        if not isinstance(target, dict):
+            merged[section] = copy.deepcopy(values)
+            continue
+        for key, value in values.items():
+            target[key] = value
+    return merged
+
+
+def toml_format_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        text = repr(value)
+        return text
+    if isinstance(value, list):
+        return "[" + ", ".join(toml_format_value(v) for v in value) + "]"
+    if value is None:
+        return "\"\""
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def dump_config_toml(config: dict[str, Any]) -> str:
+    defaults = get_default_config_dict()
+    lines: list[str] = []
+    for section in CONFIG_SECTION_ORDER:
+        section_data = config.get(section, {})
+        if not isinstance(section_data, dict):
+            section_data = {}
+        default_section = defaults.get(section, {})
+        if not isinstance(default_section, dict):
+            default_section = {}
+        lines.append(f"[{section}]")
+        handled: set[str] = set()
+        for key in CONFIG_KEY_ORDER.get(section, []):
+            handled.add(key)
+            lines.append(f"{key} = {toml_format_value(section_data.get(key, default_section.get(key, '')))}")
+        for key in sorted(k for k in section_data.keys() if k not in handled):
+            lines.append(f"{key} = {toml_format_value(section_data[key])}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def dump_config_template_with_values(config: dict[str, Any]) -> str:
+    merged = merge_config_with_defaults(config)
+    known_sections = set(CONFIG_SECTION_ORDER)
+    known_keys = {section: set(keys) for section, keys in CONFIG_KEY_ORDER.items()}
+    lines: list[str] = []
+    current_section: str | None = None
+    rendered_keys: dict[str, set[str]] = {section: set() for section in CONFIG_SECTION_ORDER}
+
+    for raw_line in CONFIG_TEMPLATE.splitlines():
+        stripped = raw_line.strip()
+        section_match = re.fullmatch(r"\[(.+)\]", stripped)
+        if section_match:
+            current_section = section_match.group(1)
+            lines.append(raw_line)
+            continue
+
+        if current_section in known_sections:
+            key_match = re.fullmatch(r"([A-Za-z0-9_]+)\s*=\s*.*", stripped)
+            if key_match:
+                key = key_match.group(1)
+                if key in known_keys.get(current_section, set()):
+                    value = merged.get(current_section, {}).get(key, "")
+                    lines.append(f"{key} = {toml_format_value(value)}")
+                    rendered_keys[current_section].add(key)
+                    continue
+
+        lines.append(raw_line)
+
+    extras: list[str] = []
+    for section in CONFIG_SECTION_ORDER:
+        section_data = merged.get(section, {})
+        if not isinstance(section_data, dict):
+            continue
+        missing_keys = [key for key in CONFIG_KEY_ORDER.get(section, []) if key not in rendered_keys[section] and key in section_data]
+        extra_keys = sorted(key for key in section_data.keys() if key not in known_keys.get(section, set()))
+        if not missing_keys and not extra_keys:
+            continue
+        if extras and extras[-1] != "":
+            extras.append("")
+        extras.append(f"[{section}]")
+        for key in missing_keys + extra_keys:
+            extras.append(f"{key} = {toml_format_value(section_data[key])}")
+
+    for section, value in merged.items():
+        if section in known_sections or not isinstance(value, dict):
+            continue
+        if extras and extras[-1] != "":
+            extras.append("")
+        extras.append(f"[{section}]")
+        for key in sorted(value.keys()):
+            extras.append(f"{key} = {toml_format_value(value[key])}")
+
+    rendered = "\n".join(lines).rstrip()
+    if extras:
+        rendered += "\n\n" + "\n".join(extras).rstrip()
+    return rendered.rstrip() + "\n"
 
 
 def parse_version_tuple(text: str) -> tuple[int, int, int] | None:
@@ -461,10 +1049,27 @@ def get_clipboard_text() -> str:
         except Exception:
             pass
 
+    if sys.platform.startswith("win"):
+        try:
+            text = subprocess.check_output(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-Clipboard -Raw",
+                ],
+                encoding="utf-8",
+                errors="ignore",
+            )
+            if text.strip():
+                return text
+        except Exception:
+            pass
+
     try:
         import tkinter as tk
     except Exception as e:
-        raise RuntimeError("クリップボードを読むには macOS の pbpaste か tkinter が必要です。") from e
+        raise RuntimeError("クリップボードを読むには macOS の pbpaste / Windows の Get-Clipboard / tkinter のいずれかが必要です。") from e
 
     root = tk.Tk()
     root.withdraw()
@@ -478,6 +1083,44 @@ def get_clipboard_text() -> str:
     if not text.strip():
         raise RuntimeError("クリップボードが空です。")
     return text
+
+
+def set_clipboard_text(text: str) -> str:
+    if sys.platform == "darwin":
+        subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=True)
+        return "pbcopy"
+
+    if sys.platform.startswith("win"):
+        subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; "
+                "$text = [Console]::In.ReadToEnd(); "
+                "Set-Clipboard -Value $text",
+            ],
+            input=text.encode("utf-8"),
+            check=True,
+        )
+        return "Set-Clipboard"
+
+    try:
+        import tkinter as tk
+    except Exception as e:
+        raise RuntimeError(
+            "クリップボードへコピーできません。macOS / Windows の標準機能か tkinter が使える Python を用意してください。"
+        ) from e
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        root.clipboard_clear()
+        root.clipboard_append(text)
+        root.update()
+    finally:
+        root.destroy()
+    return "tkinter"
 
 
 def validate_lang_dict(data: Any) -> dict[str, str]:
@@ -499,6 +1142,30 @@ def parse_lang_json_text(text: str, label: str) -> dict[str, str]:
     except json.JSONDecodeError as e:
         raise RuntimeError(f"{label} の JSON 解析に失敗しました: {e}") from e
     return validate_lang_dict(data)
+
+
+def build_lang_json_text(data: dict[str, str]) -> str:
+    return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+
+
+def write_output_text_file(path: Path, text: str) -> Path:
+    output_path = path.expanduser()
+    if output_path.exists() and output_path.is_dir():
+        raise RuntimeError(f"出力先にはファイルパスを指定してください。ディレクトリは指定できません: {output_path}")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(text, encoding="utf-8", newline="\n")
+    return output_path.resolve()
+
+
+def normalize_locale_priority(values: list[str]) -> list[str]:
+    locales: list[str] = []
+    for raw in values:
+        for item in raw.split(","):
+            locale = item.strip().lower()
+            if locale and locale not in locales:
+                locales.append(locale)
+    return locales or DEFAULT_SOURCE_LOCALE_PRIORITY[:]
 
 
 def find_first_existing(root: Path, patterns: list[str]) -> Path | None:
@@ -782,6 +1449,40 @@ def choose_best_lang_source(sources: list[LangSource], preferred_modid: str | No
     return ranked[0]
 
 
+def choose_namespace_for_extraction(mod_root: Path, explicit_namespace: str | None) -> str | None:
+    if explicit_namespace:
+        return explicit_namespace.strip() or None
+
+    # 抽出モードでは metadata が壊れていても lang 抽出を続けたいので、ここは警告止まりにします。
+    try:
+        return detect_mod_info(mod_root).mod_id
+    except Exception as e:
+        eprint(f"[WARN] mod メタデータを読めなかったため namespace 自動推定なしで続行します: {e}")
+        return None
+
+
+def extract_lang_json_result(mod_root: Path, preferred_namespace: str | None, locale_priority: list[str]) -> ExtractLangResult:
+    sources = discover_lang_sources(mod_root)
+    if not sources:
+        raise RuntimeError("lang ファイルが見つかりませんでした。assets/<namespace>/lang/ を確認してください。")
+
+    source = choose_best_lang_source(
+        sources=sources,
+        preferred_modid=preferred_namespace,
+        source_priority=locale_priority,
+        target_locale="",
+    )
+    if source is None:
+        raise RuntimeError("使える lang ファイルが見つかりませんでした。")
+
+    data = load_lang_source_dict(source)
+    return ExtractLangResult(
+        source=source,
+        data=data,
+        json_text=build_lang_json_text(data),
+    )
+
+
 PLACEHOLDER_PATTERN = re.compile(
     r"%\d*\$?[sdiffoxXeEgGaAcbhnt%]"
     r"|\{[0-9]+\}"
@@ -826,6 +1527,49 @@ def sanitize_translated_map(
     return fixed, warnings
 
 
+def build_translation_memory_glossary(memory: dict[str, str], limit: int = 40) -> str:
+    if not memory:
+        return ""
+
+    items = list(memory.items())[-limit:]
+    glossary = {src: dst for src, dst in items}
+    return json.dumps(glossary, ensure_ascii=False, indent=2)
+
+
+def apply_translation_memory(
+    source_chunk: dict[str, str],
+    translated_chunk: dict[str, str],
+    translation_memory: dict[str, str],
+    enabled: bool,
+) -> list[str]:
+    if not enabled:
+        return []
+
+    warnings: list[str] = []
+    for key, source_text in source_chunk.items():
+        locked = translation_memory.get(source_text)
+        if locked is None:
+            continue
+        if translated_chunk.get(key) != locked:
+            warnings.append(f"[WARN] 用語統一のため既訳を再利用: {key}")
+            translated_chunk[key] = locked
+    return warnings
+
+
+def update_translation_memory(
+    source_chunk: dict[str, str],
+    translated_chunk: dict[str, str],
+    translation_memory: dict[str, str],
+    enabled: bool,
+) -> None:
+    if not enabled:
+        return
+
+    for key, source_text in source_chunk.items():
+        if source_text not in translation_memory:
+            translation_memory[source_text] = translated_chunk[key]
+
+
 def validate_clipboard_translation_map(
     mod_root: Path,
     mod_info: ModInfo,
@@ -848,6 +1592,23 @@ def validate_clipboard_translation_map(
     for w in warnings:
         eprint(w)
     return cleaned_map
+
+
+def maybe_auto_fetch_source_lang_for_clipboard(
+    mod_root: Path,
+    mod_info: ModInfo,
+    config: dict[str, Any],
+    reason: Exception,
+) -> None:
+    clipboard = get_section(config, "clipboard")
+    if not cfg_bool(clipboard, "auto_fetch_source_when_missing", True):
+        raise reason
+
+    translation = get_section(config, "translation")
+    locale_priority = cfg_str_list(translation, "source_locale_priority", DEFAULT_SOURCE_LOCALE_PRIORITY)
+    result = extract_lang_json_result(mod_root, mod_info.mod_id, locale_priority)
+    method = set_clipboard_text(result.json_text)
+    raise ClipboardSourceAutoFetched(str(reason), result, method)
 
 
 def is_supported_input_scan_path(path: Path) -> bool:
@@ -904,7 +1665,7 @@ def get_api_key(api_section: dict[str, Any]) -> str:
         return direct
     env_name = cfg_str(api_section, "api_key_env", "")
     if not env_name:
-        raise RuntimeError("API キー用の環境変数名が空です。config.toml の [api].api_key_env を設定してください。")
+        raise RuntimeError("API キー用の環境変数名が空です。babel_breaker_app/config.toml の [api].api_key_env を設定してください。")
     key = os.getenv(env_name, "").strip()
     if not key:
         raise RuntimeError(f"API キーが見つかりません。環境変数 {env_name} を設定してください。")
@@ -1035,10 +1796,44 @@ def extract_text_from_anthropic_messages(data: dict[str, Any]) -> str:
     raise RuntimeError("Anthropic Messages の応答からテキストを抽出できませんでした。")
 
 
-def build_translation_prompt(chunk: dict[str, str], source_locale: str, target_language_name: str) -> str:
+def build_translation_prompt(
+    chunk: dict[str, str],
+    source_locale: str,
+    target_language_name: str,
+    mod_info: ModInfo,
+    consistency_glossary: str,
+    custom_prompt: str,
+) -> str:
     sample_json = json.dumps(chunk, ensure_ascii=False, indent=2)
+    extra_sections: list[str] = []
+
+    if consistency_glossary:
+        extra_sections.append(
+            "Consistency glossary from earlier chunks. "
+            "If the same source wording appears again, use the same translation unless it would break placeholders:\n"
+            f"{consistency_glossary}"
+        )
+
+    if custom_prompt:
+        extra_sections.append(
+            "Additional project-specific instructions from config.toml. "
+            "Follow them as long as they do not conflict with the JSON preservation rules:\n"
+            f"{custom_prompt}"
+        )
+
+    extra_text = "\n\n".join(extra_sections)
     return f"""
-You are a localization engine for Minecraft mod language files.
+You are a senior localization editor for Minecraft mod language files.
+
+Context:
+- Mod name: {mod_info.mod_name}
+- Mod id: {mod_info.mod_id}
+- Minecraft version: {mod_info.mc_version_expr or "unknown"}
+- Preserve the mod's worldbuilding, tone, character, and terminology.
+- If the mod is based on an existing anime, manga, game, or other franchise, use the established terminology and names of that work.
+- If an official term is uncertain, keep the original proper noun instead of inventing an inaccurate translation.
+- Keep recurring names, factions, items, skills, places, UI labels, and repeated wording consistent across the whole file.
+- Prefer natural, polished in-game wording over literal machine translation.
 
 Translate ONLY the JSON values from {source_locale} to {target_language_name}.
 
@@ -1059,16 +1854,24 @@ Hard rules:
 - No code fences
 - No explanations
 
+{extra_text}
+
 JSON:
 {sample_json}
 """.strip()
 
 
-def call_ai_translate_chunk(chunk: dict[str, str], config: dict[str, Any]) -> dict[str, str]:
+def call_ai_translate_chunk(
+    chunk: dict[str, str],
+    config: dict[str, Any],
+    mod_info: ModInfo,
+    consistency_glossary: str,
+) -> dict[str, str]:
     translation = get_section(config, "translation")
     api = get_section(config, "api")
 
     target_language_name = cfg_str(translation, "target_language_name", "Japanese (日本語)")
+    custom_prompt = cfg_str(translation, "custom_prompt", "")
     style = cfg_str(api, "style", "gemini_generate_content")
     model = cfg_str(api, "model", "gemini-2.5-flash")
     url = cfg_str(api, "url", "") or get_default_api_url(style, model)
@@ -1082,7 +1885,14 @@ def call_ai_translate_chunk(chunk: dict[str, str], config: dict[str, Any]) -> di
         source_locale = chunk["__meta_source_locale__"]
         chunk = {k: v for k, v in chunk.items() if k != "__meta_source_locale__"}
 
-    prompt = build_translation_prompt(chunk, source_locale, target_language_name)
+    prompt = build_translation_prompt(
+        chunk,
+        source_locale,
+        target_language_name,
+        mod_info,
+        consistency_glossary,
+        custom_prompt,
+    )
     api_key = get_api_key(api)
 
     if style == "gemini_generate_content":
@@ -1109,7 +1919,10 @@ def call_ai_translate_chunk(chunk: dict[str, str], config: dict[str, Any]) -> di
             "messages": [
                 {
                     "role": "system",
-                    "content": "You translate Minecraft mod lang JSON values only. Never modify keys. Return JSON only.",
+                    "content": (
+                        "You are an expert Minecraft mod localization editor. "
+                        "Preserve lore, tone, established franchise terminology, and JSON keys. Return JSON only."
+                    ),
                 },
                 {
                     "role": "user",
@@ -1140,7 +1953,10 @@ def call_ai_translate_chunk(chunk: dict[str, str], config: dict[str, Any]) -> di
         payload = {
             "model": model,
             "max_tokens": max_output_tokens,
-            "system": "You translate Minecraft mod lang JSON values only. Never modify keys. Return JSON only.",
+            "system": (
+                "You are an expert Minecraft mod localization editor. "
+                "Preserve lore, tone, established franchise terminology, and JSON keys. Return JSON only."
+            ),
             "messages": [
                 {"role": "user", "content": prompt}
             ],
@@ -1164,10 +1980,16 @@ def call_ai_translate_chunk(chunk: dict[str, str], config: dict[str, Any]) -> di
     return validate_lang_dict(parsed)
 
 
-def translate_lang_dict_with_ai(source_map: dict[str, str], source_locale: str, config: dict[str, Any]) -> dict[str, str]:
+def translate_lang_dict_with_ai(
+    source_map: dict[str, str],
+    source_locale: str,
+    config: dict[str, Any],
+    mod_info: ModInfo,
+) -> dict[str, str]:
     translation = get_section(config, "translation")
     chunk_size = cfg_int(translation, "chunk_size", 120)
     repair = cfg_bool(translation, "repair_broken_placeholders", True)
+    enforce_consistent_terms = cfg_bool(translation, "enforce_consistent_terms", True)
 
     items = list(source_map.items())
     chunks: list[dict[str, str]] = []
@@ -1177,10 +1999,12 @@ def translate_lang_dict_with_ai(source_map: dict[str, str], source_locale: str, 
         chunks.append(part)
 
     merged: dict[str, str] = {}
+    translation_memory: dict[str, str] = {}
     total = len(chunks)
     for idx, chunk in enumerate(chunks, start=1):
         print(f"[AI] 翻訳中 {idx}/{total} ...")
-        translated_chunk = call_ai_translate_chunk(chunk, config)
+        consistency_glossary = build_translation_memory_glossary(translation_memory)
+        translated_chunk = call_ai_translate_chunk(chunk, config, mod_info, consistency_glossary)
         original_chunk = {k: v for k, v in chunk.items() if k != "__meta_source_locale__"}
         cleaned_chunk, warnings = sanitize_translated_map(
             original_chunk,
@@ -1188,14 +2012,25 @@ def translate_lang_dict_with_ai(source_map: dict[str, str], source_locale: str, 
             repair,
             label="AI の応答",
         )
+        warnings.extend(
+            apply_translation_memory(
+                original_chunk,
+                cleaned_chunk,
+                translation_memory,
+                enforce_consistent_terms,
+            )
+        )
         for w in warnings:
             eprint(w)
+        update_translation_memory(original_chunk, cleaned_chunk, translation_memory, enforce_consistent_terms)
         merged.update(cleaned_chunk)
 
     return merged
 
 
 def find_icon_file(script_dir: Path, configured_icon_path: str) -> Path | None:
+    assets_dir = get_assets_dir(script_dir)
+
     if configured_icon_path.strip():
         p = Path(configured_icon_path).expanduser()
         if not p.is_absolute():
@@ -1204,7 +2039,16 @@ def find_icon_file(script_dir: Path, configured_icon_path: str) -> Path | None:
             return p
 
     for ext in ICON_EXT_PRIORITY:
+        p = assets_dir / f"{DEFAULT_ICON_BASENAME}{ext}"
+        if p.is_file():
+            return p
+
+    for ext in ICON_EXT_PRIORITY:
         p = script_dir / f"{DEFAULT_ICON_BASENAME}{ext}"
+        if p.is_file():
+            return p
+
+    for p in sorted(assets_dir.glob(f"{DEFAULT_ICON_BASENAME}.*")):
         if p.is_file():
             return p
 
@@ -1304,7 +2148,7 @@ def resolve_input_path(ctx: RuntimeContext, cli_input_path: str | None) -> Path:
         "入力ファイルが見つかりません。\n"
         "次のどれかを行ってください:\n"
         "1. 実行時に jar / フォルダを渡す\n"
-        "2. config.toml の [general].input_path を設定する\n"
+        "2. babel_breaker_app/config.toml の [general].input_path を設定する\n"
         "3. input/ フォルダに jar を入れる"
     )
 
@@ -1340,14 +2184,18 @@ def build_translated_map(mod_root: Path, mod_info: ModInfo, config: dict[str, An
     mode = cfg_str(translation, "mode", "ai").lower()
 
     if mode == "clipboard":
-        text = get_clipboard_text()
-        return validate_clipboard_translation_map(mod_root, mod_info, config, text), "clipboard"
+        try:
+            text = get_clipboard_text()
+            return validate_clipboard_translation_map(mod_root, mod_info, config, text), "clipboard"
+        except Exception as e:
+            maybe_auto_fetch_source_lang_for_clipboard(mod_root, mod_info, config, e)
+            raise
 
     if mode == "ai":
         source = choose_translation_source(mod_root, mod_info, config)
         print(f"[AI] 元 lang ファイル: {source.path}")
         source_map = load_lang_source_dict(source)
-        translated = translate_lang_dict_with_ai(source_map, source.locale, config)
+        translated = translate_lang_dict_with_ai(source_map, source.locale, config, mod_info)
         return translated, source.locale
 
     raise RuntimeError(f"未対応の translation.mode です: {mode}")
@@ -1510,7 +2358,7 @@ def create_resource_pack(ctx: RuntimeContext, original_input_path: Path, mod_roo
     if cfg_bool(pack, "create_zip", True):
         zip_pack_dir(build_dir, zip_path)
     else:
-        raise RuntimeError("このツールは ZIP 生成前提です。config.toml の [pack].create_zip は true にしてください。")
+        raise RuntimeError("このツールは ZIP 生成前提です。babel_breaker_app/config.toml の [pack].create_zip は true にしてください。")
 
     if keep_folder:
         return build_dir, zip_path
@@ -1519,39 +2367,146 @@ def create_resource_pack(ctx: RuntimeContext, original_input_path: Path, mod_roo
     return None, zip_path
 
 
-def main() -> int:
+def run_extract_mode(ctx: RuntimeContext, cli_input_path: str | None, args: argparse.Namespace) -> int:
+    if args.extract_no_clipboard and not args.extract_output.strip():
+        eprint("[ERROR] --extract-no-clipboard を使う場合は、あわせて --extract-output を指定してください。")
+        return 1
+
+    try:
+        input_path = resolve_input_path(ctx, cli_input_path)
+        vprint(ctx, f"[INFO] 入力: {input_path}")
+
+        mod_root, temp_dir = unpack_if_needed(input_path)
+        try:
+            locale_priority = normalize_locale_priority(args.extract_locale)
+            preferred_namespace = choose_namespace_for_extraction(mod_root, args.extract_namespace.strip() or None)
+            result = extract_lang_json_result(mod_root, preferred_namespace, locale_priority)
+        finally:
+            if temp_dir is not None:
+                temp_dir.cleanup()
+    except Exception as e:
+        eprint(f"[ERROR] {e}")
+        return 1
+
+    print(f"[OK] 抽出元: {result.source.path}")
+    print(f"[OK] namespace: {result.source.namespace}")
+    print(f"[OK] locale: {result.source.locale}")
+    print(f"[OK] キー数: {len(result.data)}")
+
+    output_path = args.extract_output.strip()
+    if output_path:
+        saved_path = write_output_text_file(Path(output_path), result.json_text)
+        print(f"[OK] ファイル保存: {saved_path}")
+
+    if not args.extract_no_clipboard:
+        try:
+            method = set_clipboard_text(result.json_text)
+            print(f"[OK] クリップボードへコピーしました: {method}")
+        except Exception as e:
+            if not output_path:
+                eprint(f"[ERROR] クリップボードへのコピーに失敗しました: {e}")
+                return 1
+            eprint(f"[WARN] クリップボードへのコピーに失敗しましたが、ファイル保存は完了しています: {e}")
+
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Babel Breaker: config.toml を使って Minecraft mod の lang を翻訳し、リソースパック ZIP を作ります。"
+        prog="python -m babel_breaker_app",
+        description="Babel Breaker: babel_breaker_app/config.toml を使って Minecraft mod の lang を翻訳し、リソースパック ZIP を作ります。"
+    )
+    parser.add_argument(
+        "-g",
+        "--gui",
+        action="store_true",
+        help="ブラウザ GUI を起動します。設定編集、元 lang 抽出、リソースパック生成を画面から行えます。",
     )
     parser.add_argument(
         "input_path",
         nargs="?",
-        help="mod の .jar または解凍済みフォルダ。省略時は config.toml と input/ を参照します。",
+        help="mod の .jar または解凍済みフォルダ。省略時は babel_breaker_app/config.toml と input/ を参照します。",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "-x",
+        "--extract-lang",
+        action="store_true",
+        help="リソースパックを作らず、mod の元 lang JSON を取り出します。",
+    )
+    parser.add_argument(
+        "-o",
+        "--extract-output",
+        default="",
+        help="--extract-lang の時に、取り出した JSON を保存するファイルパスです。",
+    )
+    parser.add_argument(
+        "-c",
+        "--extract-no-clipboard",
+        action="store_true",
+        help="--extract-lang の時に、クリップボードへコピーせずファイル保存だけにします。",
+    )
+    parser.add_argument(
+        "-l",
+        "--extract-locale",
+        action="append",
+        default=[],
+        help="--extract-lang の時に優先したい locale を指定します。複数回指定可。",
+    )
+    parser.add_argument(
+        "-n",
+        "--extract-namespace",
+        default="",
+        help="--extract-lang の時に優先したい namespace(mod_id) を指定します。",
+    )
+    parser.add_argument(
+        "-a",
+        "--no-auto-fetch-source-lang",
+        action="store_true",
+        help="clipboard モードで対応 JSON が見つからなくても、元 lang JSON の自動取得を行いません。",
+    )
+    args = parser.parse_args(argv)
 
-    script_dir = Path(__file__).resolve().parent
-    config_path = script_dir / "config.toml"
+    script_dir = detect_project_root()
+    config_path = get_config_path(script_dir)
+    config_path = migrate_legacy_root_config(script_dir, config_path)
 
-    if not config_path.exists():
+    if args.gui:
+        try:
+            from .web_gui import launch_web_gui_app
+        except ImportError:
+            from web_gui import launch_web_gui_app
+
+        return launch_web_gui_app(sys.modules[__name__], script_dir, config_path)
+
+    if not config_path.exists() and not args.extract_lang:
         ensure_config_file(config_path)
-        print("[INFO] config.toml が無かったため、見本を自動生成しました。")
+        print("[INFO] babel_breaker_app/config.toml が無かったため、見本を自動生成しました。")
         print(f"[INFO] ここを編集してください: {config_path}")
         return 0
 
-    try:
-        config = load_toml(config_path)
-    except Exception as e:
-        eprint(f"[ERROR] config.toml の読み込みに失敗しました: {e}")
-        return 1
+    config: dict[str, Any] = {}
+    if config_path.exists():
+        try:
+            config = load_toml(config_path)
+        except Exception as e:
+            eprint(f"[ERROR] babel_breaker_app/config.toml の読み込みに失敗しました: {e}")
+            return 1
+
+    if args.no_auto_fetch_source_lang:
+        clipboard_cfg = config.setdefault("clipboard", {})
+        if isinstance(clipboard_cfg, dict):
+            clipboard_cfg["auto_fetch_source_when_missing"] = False
 
     general = get_section(config, "general")
     ctx = RuntimeContext(
         script_dir=script_dir,
         config_path=config_path,
         config=config,
-        verbose=cfg_bool(general, "verbose", True),
+        verbose=cfg_bool(general, "verbose", False),
     )
+
+    if args.extract_lang:
+        return run_extract_mode(ctx, args.input_path, args)
 
     try:
         input_path = resolve_input_path(ctx, args.input_path)
@@ -1564,6 +2519,14 @@ def main() -> int:
             if temp_dir is not None:
                 temp_dir.cleanup()
 
+    except ClipboardSourceAutoFetched as e:
+        print("[INFO] クリップボードにこの mod 用の翻訳 JSON が見つからなかったため、元 lang JSON を自動取得しました。")
+        print(f"[INFO] 元 lang ファイル: {e.result.source.path}")
+        print(f"[INFO] namespace: {e.result.source.namespace}")
+        print(f"[INFO] locale: {e.result.source.locale}")
+        print(f"[INFO] クリップボード: {e.clipboard_method}")
+        print("[INFO] この JSON の値だけ翻訳して、もう一度実行してください。")
+        return 0
     except Exception as e:
         eprint(f"[ERROR] {e}")
         return 1

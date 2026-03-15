@@ -13,24 +13,27 @@
 # ------------------------------------------------------------
 # 1. このファイルを保存する
 # 2. 必要なら API キーを環境変数に入れる
-# 3. icon.png を babel_breaker.py と同じフォルダに置く
+# 3. 必要なら babel_breaker_app/assets/icon.png を差し替える
 #    （無くても動きますが、pack.png は付きません）
-# 4. python3 babel_breaker.py を実行する
+# 4. project ルートで python3 -m babel_breaker_app を実行する
 #
 # ------------------------------------------------------------
 # 実行方法
 # ------------------------------------------------------------
 #
 # いちばん簡単:
-#   python3 babel_breaker.py
+#   python3 -m babel_breaker_app
 #
 # jar を直接指定:
-#   python3 babel_breaker.py "/path/to/mod.jar"
+#   python3 -m babel_breaker_app "/path/to/mod.jar"
 #
 # 解凍済みフォルダを指定:
-#   python3 babel_breaker.py "/path/to/unpacked_mod"
+#   python3 -m babel_breaker_app "/path/to/unpacked_mod"
 #
-# この config.toml で普段の設定を固定しておけば、
+# 元 lang JSON を取り出したい時:
+#   python3 -m babel_breaker_app --extract-lang "/path/to/mod.jar"
+#
+# この `babel_breaker_app/config.toml` で普段の設定を固定しておけば、
 # 実行時に毎回たくさん指定する必要はありません。
 #
 # ============================================================
@@ -94,6 +97,25 @@ chunk_size = 120
 # true 推奨
 repair_broken_placeholders = true
 
+# 同じ原文に対して同じ訳語を使うためのメモリ機能です。
+# true のとき、前のチャンクで確定した同一原文の訳語を次のチャンクでも優先します。
+enforce_consistent_terms = true
+
+# AI へ追加で渡すカスタム指示です。
+# mod ごとの世界観、口調、固有名詞ルールなどを書けます。
+# 空文字なら無効です。
+#
+# 例:
+# custom_prompt = "魔法名はカタカナに統一。敬語は使わない。"
+#
+# 複数行にしたい場合:
+# custom_prompt = """
+# 公式日本語訳がある用語はそれを優先。
+# 主人公陣営の技名は必ずカタカナ表記。
+# UI は短く、会話文は自然な日本語にする。
+# """
+custom_prompt = ""
+
 
 [pack]
 # ZIP は常に作ります
@@ -105,8 +127,9 @@ keep_folder = false
 
 # pack.png に使うアイコンのパスです。
 # 空なら次の順で探します:
-# 1. babel_breaker.py と同じフォルダの icon.png
-# 2. icon.webp / icon.jpg / icon.jpeg / icon.bmp / icon.tif / icon.tiff
+# 1. babel_breaker_app/assets/icon.png
+# 2. project ルートの icon.png
+# 3. icon.webp / icon.jpg / icon.jpeg / icon.bmp / icon.tif / icon.tiff
 #
 # 無くても pack は動きますが、見た目アイコンが付きません。
 icon_path = ""
@@ -230,9 +253,9 @@ anthropic_version = "2023-06-01"
 # ここは説明用セクションです。
 #
 # 使い方:
-# 0. 必要なら extract_lang_json.py で元 lang JSON を取り出す
+# 0. 必要なら `python3 -m babel_breaker_app --extract-lang ...` で元 lang JSON を取り出す
 # 1. 翻訳済み JSON 本文をコピー
-# 2. python3 babel_breaker.py
+# 2. python3 -m babel_breaker_app
 #
 # JSON の形式はこうです:
 # {
@@ -243,7 +266,13 @@ anthropic_version = "2023-06-01"
 # 注意:
 # - キーは変えない
 # - 値だけ翻訳する
+# - クリップボードにこの mod 用の JSON が無い時は、元 lang JSON を自動で取得できます
 enabled = true
+
+# クリップボードが空、JSON でない、またはキーが合わない時に
+# mod に対応する元 lang JSON を自動でクリップボードへ入れます。
+# 値だけ翻訳して再実行してください。
+auto_fetch_source_when_missing = true
 
 
 [input_scan]

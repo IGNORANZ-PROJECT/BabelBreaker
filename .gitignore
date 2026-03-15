@@ -1,7 +1,11 @@
 # Byte-compiled / optimized / DLL files
+.DS_Store
 __pycache__/
 *.py[codz]
 *$py.class
+
+# Project-generated output
+_babel_breaker_output/
 
 # C extensions
 *.so

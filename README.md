@@ -1,677 +1,405 @@
 # Babel Breaker
 
-Babel Breaker は、Minecraft の mod の言語ファイルを翻訳し、
-**そのまま使えるリソースパック ZIP** を自動生成するツールです。
+Babel Breaker は、Minecraft mod の lang ファイルを翻訳し、そのまま使えるリソースパック ZIP を作るツールです。
 
-- `.jar` ファイルをそのまま指定できます
-- 解凍済みの mod フォルダでも使えます
-- AI で自動翻訳もできます
-- すでに翻訳済みの JSON を使うこともできます
-- 補助ツールで元 lang JSON をクリップボードやファイルへ取り出せます
-- **Mac / Windows のどちらでも使えます**
-- **GitHub やターミナルに詳しくなくても使えるように設計されています**
+GUI と CUI の両方に対応しています。
 
----
+- GUI で設定を編集できる
+- mod の `.jar` / `.zip` / 解凍済みフォルダを直接読める
+- 元 lang JSON を自動で取り出せる
+- クリップボード翻訳でも AI 翻訳でも使える
+- Mac / Windows の両方を想定している
 
-## これは何をするツール？
+## 1. まず何ができるのか
 
-Minecraft の mod には、文字表示用の言語ファイルがあります。
-Babel Breaker は、その言語ファイルを使って、
+- mod の中から翻訳元 lang を自動検出する
+- 元 lang JSON をクリップボードへコピーする
+- 元 lang JSON を `.json` ファイルとして保存する
+- 翻訳済み JSON を使ってリソースパック ZIP を作る
+- AI を使って値だけ翻訳し、そのまま ZIP を作る
+- GUI で `babel_breaker_app/config.toml` の全設定を編集する
 
-- 日本語化したり
-- 他の言語に翻訳したり
-- リソースパックとしてまとめたり
+重要なのは、Minecraft の言語ファイルではキーを変えてはいけないことです。
 
-できます。
+- キー: 内部 ID
+- 値: ゲーム内に表示される文章
 
-作られた ZIP は、Minecraft の `resourcepacks` フォルダに入れるだけで使えます。
+Babel Breaker は値だけを翻訳し、キーは維持します。
 
----
+## 2. いちばん簡単な始め方
 
-## できること
+### Mac
 
-- mod の `.jar` をそのまま読み込む
-- mod の中の言語ファイルを自動で探す
-- mod の中の元 lang JSON を取り出してクリップボードへコピーする
-- mod の中の元 lang JSON をファイルとして保存する
-- AI を使って翻訳する
-- すでに翻訳済みの JSON をクリップボードから読む
-- リソースパック ZIP を自動で作る
-- 必要なら展開フォルダも残せる
+1. Python 3.10 以上を入れる
+2. このフォルダを開く
+3. `launch_gui.command` を実行する
 
----
+もし `launch_gui.command` が開けない場合は、ターミナルで次を実行してください。
 
-## 超重要な注意
+```bash
+python3 -m babel_breaker_app --gui
+```
 
-Minecraft の言語ファイルは、
+`--gui` は Tk に依存しないブラウザ GUI を開くので、Mac の `tkinter` が壊れている環境でも使えます。
 
-- **キー** = 内部ID
-- **値** = 実際に表示される文章
+### Windows
 
-です。
+1. Python 3.10 以上を入れる
+2. このフォルダを開く
+3. `launch_gui.bat` を実行する
 
-**キーを翻訳すると壊れます。**
+うまく開かない場合は、コマンドプロンプトまたは PowerShell で次を実行してください。
 
-Babel Breaker は、
-**キーはそのまま / 値だけ翻訳**
-するように作られています。
+```bash
+py -m babel_breaker_app --gui
+```
 
----
+## 3. フォルダ構成
 
-## 必要なもの
-
-### 必須
-- Python 3.10 以上
-- `babel_breaker.py`
-- `config.toml`
-
-### あると便利
-- `icon.png`
-  - リソースパックの見た目アイコンになります
-- `Pillow`
-  - PNG 以外の画像を `pack.png` に変換したい時に便利
-- `tomli`
-  - Python 3.10 系で必要になることがあります
-
----
-
-## まずはフォルダを作る
-
-最初に、作業用フォルダを 1 つ作ってください。
-名前は何でも大丈夫です。ここでは例として `BabelBreaker` にします。
-
-中身はこんな感じにしてください。
+ルートには起動用ファイルだけを残し、本体コード・画像・設定は `babel_breaker_app/` にまとめています。`babel_breaker_app/config.toml` は無ければ作れます。
 
 ```text
 BabelBreaker/
-├─ babel_breaker.py
-├─ extract_lang_json.py   ← 元 lang JSON 抽出用の補助ツール
-├─ config.toml
+├─ launch_gui.command
+├─ launch_gui.bat
 ├─ README.md
-├─ icon.png        ← あれば便利
-├─ input/          ← 入力用（任意）
-└─ _babel_breaker_output/  ← 出力先（自動作成）
+├─ babel_breaker_app/
+│  ├─ __main__.py
+│  ├─ config.toml
+│  ├─ main.py
+│  ├─ web_gui.py
+│  ├─ gui_shared.py
+│  └─ assets/
+│     ├─ icon.png         ← リソースパック用アイコン
+│     └─ favicon.png      ← ブラウザ GUI のタブアイコン
+└─ _babel_breaker_output/ ← 自動作成
 ```
 
----
+ルートには、まず使う `launch_gui.command` / `launch_gui.bat` と `README.md` が見えるようにしています。
 
-## Python を入れる
+`babel_breaker_app/config.toml` が無い場合:
 
-### Windows
-1. 公式の Python 配布ページを開く
-2. Python 3.10 以上をインストールする
-3. インストール時に **Add Python to PATH** にチェックを入れる
-4. 完了後、**コマンドプロンプト** または **PowerShell** を開く
-5. 次を入力
+- CUI で `python3 -m babel_breaker_app` を実行すると、コメント付きの見本を自動生成します
+- GUI で「設定を保存」しても、説明付きの `babel_breaker_app/config.toml` を作成します
+
+## 4. GUI の使い方
+
+`--gui` はローカルのブラウザ GUI を起動します。ローカル URL が表示され、通常は自動でブラウザが開きます。ブラウザのタブアイコンには `babel_breaker_app/assets/favicon.png` を使います。
+
+新しい GUI は、まずシンプルな操作だけを見せる構成です。
+
+1. mod の `.jar` / `.zip` を画面にドラッグ＆ドロップする
+2. `clipboard` か `AI` を選ぶ
+3. `リソースパック生成` か `元 lang を取得` を押す
+
+普段使わない設定は、`詳細設定を開く` を押すまで出ません。
+
+複数ファイルをまとめて落とすこともできます。処理中に追加したファイルはキューに積まれ、残りが順番に処理されます。
+
+### GUI でできること
+
+- mod JAR / ZIP のドラッグ＆ドロップ入力
+- 複数 mod のキュー投入
+- 処理中の追加キュー
+- ボタンからのファイル選択 / フォルダ選択
+- `リソースパック生成`
+  今の設定で本番処理を実行します
+- `元 lang を取得`
+  mod の中から翻訳元 lang を自動抽出します
+- `設定を保存`
+  GUI の内容を `babel_breaker_app/config.toml` に保存します
+- `設定フォルダを開く`
+  設定ファイルの場所を開きます
+- `出力先を開く`
+  出力フォルダを開きます
+- `README を開く`
+  この説明を開きます
+
+### 詳細設定に入っているもの
+
+- 出力フォルダ
+- locale
+- AI 追加指示
+- API 設定
+- pack 設定
+- clipboard 補助設定
+- 抽出時の保存先や namespace 指定
+- ログ表示
+
+### GUI での基本運用
+
+- 普段は `.jar` / `.zip` をドロップしてキューへ入れる
+- キューに複数入れたまま `リソースパック生成` を押す
+- 途中で別の mod を追加しても、残りへ順番に積まれる
+- 不要な項目はキュー一覧から削除できる
+
+## 5. 2 つの翻訳モード
+
+### `clipboard` モード
+
+自分で翻訳済み JSON を用意するモードです。
+
+流れ:
+
+1. `元 lang を取得` で元 JSON を抜き出す
+2. JSON の値だけ翻訳する
+3. 翻訳済み JSON をクリップボードへコピーする
+4. `translation.mode = "clipboard"` にして生成する
+
+特徴:
+
+- 自分で翻訳内容を厳密に調整しやすい
+- 別の AI、翻訳サービス、手動翻訳と組み合わせやすい
+- キー照合を行うので、足りないキーや余計なキーがある JSON はそのまま通りません
+
+さらに、clipboard モードでは次の補助があります。
+
+- クリップボードにこの mod 用の JSON が無い
+- JSON が壊れている
+- キーが合わない
+
+この場合、既定では対応する元 lang JSON を自動取得してクリップボードへ入れ直します。
+
+自動取得を切りたい場合:
+
+- GUI の `詳細設定` 内でオフにする
+- CUI なら `-a` または `--no-auto-fetch-source-lang`
+
+### `ai` モード
+
+元 lang を自動検出して AI で値だけ翻訳するモードです。
+
+特徴:
+
+- 翻訳から pack 化まで一気に進められる
+- 同じ原文には同じ訳語を優先する
+- mod の世界観、口調、固有名詞を守る方向でプロンプトを作る
+- アニメやゲーム原作 mod では既存作品の用語を優先させやすい
+
+AI モードでは、次の設定が重要です。
+
+- `translation.enforce_consistent_terms = true`
+  同じ原文に対して同じ訳語を使いやすくします
+- `translation.custom_prompt`
+  作品ごとの用語ルールを足せます
+
+例:
+
+```toml
+[translation]
+custom_prompt = """
+公式日本語訳がある固有名詞は必ずそれを使う。
+アニメ本編の用語表記に合わせる。
+技名と組織名は既存作品の日本語表記を優先する。
+UI 文言は短く自然にする。
+"""
+```
+
+## 6. 元 lang JSON を取り出す
+
+抽出は GUI から行うのがいちばん簡単です。
+
+GUI では次を設定できます。
+
+- 保存先ファイル
+- locale 優先順
+- namespace 指定
+- クリップボードへも入れるか、ファイルだけにするか
+
+### CUI で抽出する場合
 
 ```bash
-python --version
+python3 -m babel_breaker_app --extract-lang "/path/to/SomeMod.jar"
 ```
 
-または
+短縮形:
 
 ```bash
-py --version
+python3 -m babel_breaker_app -x "/path/to/SomeMod.jar"
 ```
 
-バージョンが表示されれば OK です。
+よく使うオプション:
+
+- `-o`, `--extract-output`
+  抽出 JSON をファイル保存する
+- `-c`, `--extract-no-clipboard`
+  クリップボードへ入れず、ファイルだけ保存する
+- `-l`, `--extract-locale`
+  優先 locale を指定する
+- `-n`, `--extract-namespace`
+  優先 namespace を指定する
+
+例:
+
+```bash
+python3 -m babel_breaker_app -x "/path/to/SomeMod.jar" -o "/path/to/source_lang.json"
+```
+
+## 7. CUI もそのまま使える
+
+GUI を追加しても、従来の CUI は残しています。
+
+### GUI 起動
+
+```bash
+python3 -m babel_breaker_app --gui
+```
+
+### 通常実行
+
+```bash
+python3 -m babel_breaker_app "/path/to/SomeMod.jar"
+```
+
+### 設定ファイルだけで実行
+
+```bash
+python3 -m babel_breaker_app
+```
+
+### `input/` 自動探索を使う
+
+`general.input_path` が空で、CLI 引数も無い場合は `input_scan` 設定が使われます。
+
+```text
+input/
+└─ SomeMod.jar
+```
+
+その後:
+
+```bash
+python3 -m babel_breaker_app
+```
+
+## 8. 必要なもの
+
+### 必須
+
+- Python 3.10 以上
+
+### 推奨
+
+- Python 3.11 以上
+  `tomllib` が標準で使えるため設定読込が楽です
+- `Pillow`
+  PNG 以外の画像を `pack.png` に変換したい場合に便利です
+- `tomli`
+  Python 3.10 系で必要になることがあります
+
+インストール例:
 
 ### Mac
-1. **ターミナル** を開く
-2. 次を入力
-
-```bash
-python3 --version
-```
-
-Python 3.10 以上が出ればそのまま使えます。
-
-もし入っていなければ、Python を公式サイトなどからインストールしてください。
-
----
-
-## ターミナルって何？
-
-このツールは、
-**黒い画面に文字を打って実行するタイプ**
-です。
-
-でも、やることはほとんど決まっています。
-
-### Windows なら
-- コマンドプロンプト
-- PowerShell
-
-のどちらでも大丈夫です。
-
-### Mac なら
-- ターミナル
-
-を使います。
-
----
-
-## フォルダを開く方法
-
-Babel Breaker のフォルダへ移動する必要があります。
-
-### Windows
-BabelBreaker フォルダを開いて、
-アドレスバーに `cmd` と入力して Enter を押すと、
-その場所でコマンドプロンプトを開けます。
-
-または、PowerShell を開いてから次のように移動します。
-
-```bash
-cd "C:\Users\あなたの名前\Desktop\BabelBreaker"
-```
-
-### Mac
-ターミナルを開いて、次のように移動します。
-
-```bash
-cd "/Users/あなたの名前/Desktop/BabelBreaker"
-```
-
----
-
-## 最初に入れておくと便利なもの
-
-必要に応じて、以下を入れてください。
-
-### Mac / Windows 共通
-```bash
-pip install pillow tomli
-```
-
-Mac で `pip` が動かない場合は、
 
 ```bash
 python3 -m pip install pillow tomli
 ```
 
-Windows で `pip` が動かない場合は、
+### Windows
 
 ```bash
 py -m pip install pillow tomli
 ```
 
----
+### GUI の実装について
 
-## `config.toml` とは？
+GUI はブラウザ版に統一しています。
 
-`config.toml` は、
-**普段使う設定を保存しておくファイル** です。
+- `python3 -m babel_breaker_app --gui`
+  最も安定する GUI です
 
-これがあるおかげで、毎回長いコマンドを書かなくて済みます。
+Mac / Windows のどちらでも `--gui` を使ってください。
 
-たとえば、
+## 9. 設定ファイルについて
 
-- どの API を使うか
-- 翻訳先の言語
-- ZIP だけ作るか
-- 展開フォルダも残すか
-- 入力ファイルの場所
+`babel_breaker_app/config.toml` は普段使う設定を保存するファイルです。
 
-などを、あらかじめ決めておけます。
+GUI で全部編集できますが、手で編集しても構いません。
 
----
+主に触る設定:
 
-## いちばん簡単な使い方
+```toml
+[general]
+input_path = ""
+output_dir = "_babel_breaker_output"
 
-### 方法1: `config.toml` に入力先を書いて実行
-`config.toml` の `input_path` に mod の `.jar` の場所を書きます。
+[translation]
+mode = "clipboard"
+target_locale = "ja_jp"
+target_language_name = "Japanese (日本語)"
+enforce_consistent_terms = true
+custom_prompt = ""
+
+[api]
+style = "gemini_generate_content"
+model = "gemini-2.5-flash"
+api_key_env = "GEMINI_API_KEY"
+```
+
+設定ファイルが無い時に生成される内容は、説明コメント付きです。
+
+## 10. AI 利用時の注意
+
+API モードでは `[api]` の設定が必要です。
 
 例:
 
 ```toml
-[general]
-input_path = "C:/Users/you/Downloads/SomeMod.jar"
-```
-
-または Mac なら:
-
-```toml
-[general]
-input_path = "/Users/you/Downloads/SomeMod.jar"
-```
-
-その後、実行します。
-
-#### Windows
-```bash
-python babel_breaker.py
-```
-
-または
-
-```bash
-py babel_breaker.py
-```
-
-#### Mac
-```bash
-python3 babel_breaker.py
-```
-
----
-
-### 方法2: 実行時に `.jar` を1回だけ指定
-`config.toml` に入力先を書きたくない場合は、実行時に渡せます。
-
-#### Windows
-```bash
-python babel_breaker.py "C:\Users\you\Downloads\SomeMod.jar"
-```
-
-または
-
-```bash
-py babel_breaker.py "C:\Users\you\Downloads\SomeMod.jar"
-```
-
-#### Mac
-```bash
-python3 babel_breaker.py "/Users/you/Downloads/SomeMod.jar"
-```
-
----
-
-### 方法3: input フォルダに入れて実行
-`config.toml` の `input_path` が空なら、  
-`input/` フォルダの中も自動で探します。
-
-1. `input` フォルダに mod の `.jar` を入れる
-2. 実行する
-
-#### Windows
-```bash
-python babel_breaker.py
-```
-
-#### Mac
-```bash
-python3 babel_breaker.py
-```
-
----
-
-## 補助ツールで元 lang JSON を取り出す
-
-`extract_lang_json.py` は、mod の中にある元の lang を取り出すための補助ツールです。
-
-これは特に、
-
-- clipboard モードで使う元 JSON を確認したい時
-- 翻訳サービスや別の AI に投げる前に JSON を抜き出したい時
-- 元の en_us.json をファイルとして保存しておきたい時
-
-に便利です。
-
-### いちばん簡単な使い方
-
-#### Windows
-```bash
-py extract_lang_json.py "C:\Users\you\Downloads\SomeMod.jar"
-```
-
-#### Mac
-```bash
-python3 extract_lang_json.py "/Users/you/Downloads/SomeMod.jar"
-```
-
-これで、
-
-- mod の中の lang を自動で選ぶ
-- JSON 形式に整える
-- クリップボードへコピーする
-
-ところまでやります。
-
-### ファイルにも保存したい時
-
-#### Windows
-```bash
-py extract_lang_json.py "C:\Users\you\Downloads\SomeMod.jar" --output "C:\Users\you\Desktop\SomeMod_en_us.json"
-```
-
-#### Mac
-```bash
-python3 extract_lang_json.py "/Users/you/Downloads/SomeMod.jar" --output "/Users/you/Desktop/SomeMod_en_us.json"
-```
-
-この場合は、
-
-- クリップボードにもコピーする
-- 同じ内容を JSON ファイルにも保存する
-
-の両方を行います。
-
-### ファイルだけ欲しい時
-
-```bash
-python3 extract_lang_json.py "/Users/you/Downloads/SomeMod.jar" --output "/Users/you/Desktop/SomeMod_en_us.json" --no-clipboard
-```
-
-### locale を変えたい時
-
-デフォルトでは `en_us`、次に `en_gb` を優先します。  
-別の locale を優先したい時は `--locale` を使います。
-
-```bash
-python3 extract_lang_json.py "/Users/you/Downloads/SomeMod.jar" --locale en_gb --locale fr_fr
-```
-
-### namespace を手動で指定したい時
-
-複数 namespace を持つ modpack 的な jar などで、どれを優先するか明示したい場合は `--namespace` を使います。
-
-```bash
-python3 extract_lang_json.py "/Users/you/Downloads/SomeMod.jar" --namespace somemod
-```
-
-### 取り出した後の流れ
-
-1. `extract_lang_json.py` で元 JSON を取り出す
-2. JSON の **値だけ** 翻訳する
-3. 翻訳済み JSON をクリップボードへコピーする
-4. `config.toml` の `mode = "clipboard"` にする
-5. `babel_breaker.py` を実行する
-
----
-
-## 2つのモード
-
-### 1. AI 翻訳モード
-AI で翻訳して、そのままリソースパックを作ります。
-
-`config.toml` のここをこうします。
-
-```toml
-[translation]
-mode = "ai"
-```
-
-このモードでは、
-
-- mod 内の言語ファイルを探す
-- 値だけ翻訳する
-- ZIP を作る
-
-ところまで自動でやります。
-
-### 2. クリップボードモード
-すでに翻訳済みの JSON がある場合に使います。
-
-`config.toml` のここをこうします。
-
-```toml
-[translation]
-mode = "clipboard"
-```
-
-この場合は、
-
-1. 翻訳済み JSON をコピー
-2. 実行
-
-で ZIP を作れます。
-
-元の lang JSON を抜き出したい時は、先に `extract_lang_json.py` を使うと楽です。
-
----
-
-## AI を使う時の設定
-
-`config.toml` の `[api]` を設定します。
-
-たとえば Gemini を使うなら、だいたいこんな感じです。
-
-```toml
 [api]
-style = "gemini_generate_content"
-model = "gemini-2.5-flash"
+style = "openai_responses"
+model = "gpt-5-mini"
 url = ""
-api_key_env = "GEMINI_API_KEY"
+api_key_env = "OPENAI_API_KEY"
 api_key_direct = ""
 timeout = 180
 temperature = 0.2
 max_output_tokens = 8192
+anthropic_version = "2023-06-01"
 ```
 
----
-
-## APIキーの入れ方
-
-### Gemini の場合
-
-#### Windows PowerShell
-```powershell
-$env:GEMINI_API_KEY="あなたのAPIキー"
-```
-
-#### Windows コマンドプロンプト
-```cmd
-set GEMINI_API_KEY=あなたのAPIキー
-```
-
-#### Mac
-```bash
-export GEMINI_API_KEY="あなたのAPIキー"
-```
-
-### OpenAI の場合
-
-#### Windows PowerShell
-```powershell
-$env:OPENAI_API_KEY="あなたのAPIキー"
-```
-
-#### Mac
-```bash
-export OPENAI_API_KEY="あなたのAPIキー"
-```
-
-### Anthropic の場合
-
-#### Windows PowerShell
-```powershell
-$env:ANTHROPIC_API_KEY="あなたのAPIキー"
-```
-
-#### Mac
-```bash
-export ANTHROPIC_API_KEY="あなたのAPIキー"
-```
-
----
-
-## 対応している API
-
-`config.toml` の `[api]` の `style` で選べます。
-
-### Gemini ネイティブ API
-```toml
-style = "gemini_generate_content"
-```
-
-### Gemini OpenAI互換
-```toml
-style = "gemini_openai_chat"
-```
-
-### OpenAI Responses
-```toml
-style = "openai_responses"
-```
-
-### OpenAI Chat Completions
-```toml
-style = "openai_chat_completions"
-```
-
-### Anthropic Messages
-```toml
-style = "anthropic_messages"
-```
-
-### 汎用 OpenAI互換 Chat
-```toml
-style = "openai_compatible_chat"
-```
-
-### 汎用 OpenAI互換 Responses
-```toml
-style = "openai_compatible_responses"
-```
-
----
-
-## 翻訳先言語を変える
-
-`config.toml` の `[translation]` を変更します。
-
-たとえば日本語なら:
-
-```toml
-[translation]
-target_locale = "ja_jp"
-target_language_name = "Japanese (日本語)"
-```
-
-フランス語なら:
-
-```toml
-[translation]
-target_locale = "fr_fr"
-target_language_name = "French (Français)"
-```
-
-ドイツ語なら:
-
-```toml
-[translation]
-target_locale = "de_de"
-target_language_name = "German (Deutsch)"
-```
-
-すると、出力されるファイル名も変わります。
-
-- `ja_jp.json`
-- `fr_fr.json`
-- `de_de.json`
-
-のようになります。
-
----
-
-## 出力されるもの
-
-通常は ZIP だけ作られます。
-
-```text
-_babel_breaker_output/
-└─ Babel_Breaker_ModName_1.2.3_ja_jp.zip
-```
-
-`keep_folder = true` にすると、展開フォルダも残ります。
-
-```text
-_babel_breaker_output/
-├─ Babel_Breaker_ModName_1.2.3_ja_jp/
-└─ Babel_Breaker_ModName_1.2.3_ja_jp.zip
-```
-
----
-
-## Minecraft で使う方法
-
-作られた ZIP を、Minecraft の `resourcepacks` フォルダに入れてください。
-
-### 例
-- Windows:
-  `.minecraft\resourcepacks`
-- Mac:
-  `~/Library/Application Support/minecraft/resourcepacks`
-
-その後、Minecraft のリソースパック設定画面で有効化します。
-
----
-
-## うまくいかない時
-
-### 1. `config.toml` がない
-最初の実行で自動生成されます。
-生成されたら、その中身を確認してください。
-
-### 2. APIキーが見つからない
-環境変数が設定されていない可能性があります。
-もう一度 API キーを入れてから実行してください。
-
-### 3. icon がない
-無くても動くことが多いですが、pack.png は付きません。
-`icon.png` を `babel_breaker.py` と同じフォルダに置いてください。
-
-### 4. Python が見つからない
-Windows なら `py` を試してください。
-
-```bash
-py babel_breaker.py
-```
-
-Mac なら `python3` を使ってください。
-
-```bash
-python3 babel_breaker.py
-```
-
-### 5. 翻訳が変
-モデルや API を変えると改善することがあります。
-また、専門用語の多い mod は、AI より手動調整の方が安定する場合があります。
-
----
-
-## いちばんおすすめの使い方
-
-初心者向けには、まずこれです。
-
-1. `config.toml` の `translation.mode = "ai"` にする
-2. `style = "gemini_generate_content"` にする
-3. APIキーを設定する
-4. `input` フォルダに mod の `.jar` を入れる
-5. 実行する
-
-### Windows
-```bash
-py babel_breaker.py
-```
+API キーは、できるだけ環境変数で渡すことを推奨します。
 
 ### Mac
+
 ```bash
-python3 babel_breaker.py
+export OPENAI_API_KEY="your_api_key"
 ```
 
-これが一番ラクです。
+### Windows PowerShell
 
----
+```powershell
+$env:OPENAI_API_KEY="your_api_key"
+```
 
-## 免責事項
+## 11. トラブル時
 
-このツールの使用は **自己責任** です。
-翻訳結果、生成物、導入による不具合、データ損失、互換性問題、配布トラブルなどについて、開発元は責任を負いません。
+### `babel_breaker_app/config.toml` が無いと言われる
 
-mod の翻訳公開や再配布を行う場合は、**元 mod のライセンスや配布条件**を必ず確認してください。
+次のどちらかを行ってください。
 
----
+- GUI を起動して `設定を保存` を押す
+- CUI で `python3 -m babel_breaker_app` を 1 回実行する
 
-## ライセンス
+### GUI が起動しない
 
-MIT License
+- Python 3.10 以上か確認する
+- まずはターミナルから `python3 -m babel_breaker_app --gui` を試す
+- ブラウザが自動で開かない場合は、表示された `http://127.0.0.1:...` を手で開く
+- それでも起動しない場合は、そのままのログを確認する
 
-Copyright (c) IGNORANZ PROJECT
+### AI モードで API エラーになる
 
----
+- API キー環境変数名が正しいか確認する
+- `api.style` と `api.model` の組み合わせを確認する
+- OpenAI 互換 API の場合は `api.url` を確認する
 
-## 開発元
+### clipboard モードで失敗する
 
-©IGNORANZ PROJECT
+- クリップボードの JSON がその mod に対応しているか確認する
+- 値だけ翻訳し、キーを変えていないか確認する
+- 既定では元 lang JSON の自動取得が動くので、ログも確認する
+
+## 12. 補足
+
+- いま使うなら `python3 -m babel_breaker_app --extract-lang` を使えば十分です
+- GUI と CUI は同じ本体処理を呼んでいます
