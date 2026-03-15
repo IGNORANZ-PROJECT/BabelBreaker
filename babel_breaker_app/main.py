@@ -552,9 +552,22 @@ class RuntimeContext:
 
 @dataclass
 class ExtractLangResult:
+    entries: list["ExtractLangEntry"]
+    json_text: str
+
+    @property
+    def source(self) -> LangSource:
+        return self.entries[0].source
+
+    @property
+    def data(self) -> dict[str, str]:
+        return self.entries[0].data
+
+
+@dataclass
+class ExtractLangEntry:
     source: LangSource
     data: dict[str, str]
-    json_text: str
 
 
 @dataclass
@@ -562,6 +575,12 @@ class TranslationCandidate:
     label: str
     data: dict[str, str]
     namespace_hint: str | None = None
+
+
+@dataclass
+class TranslatedLangEntry:
+    source: LangSource
+    data: dict[str, str]
 
 
 class ClipboardSourceAutoFetched(Exception):
@@ -1362,6 +1381,20 @@ def load_translation_candidates_from_text(text: str, label: str) -> list[Transla
     return deduped
 
 
+def load_translation_candidates_or_raise(text: str, label: str) -> list[TranslationCandidate]:
+    candidates = load_translation_candidates_from_text(text, label)
+    if candidates:
+        return candidates
+
+    stripped = text.strip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        try:
+            json.loads(stripped)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"{label} の JSON 解析に失敗しました: {e}") from e
+    raise RuntimeError(f"{label} から翻訳データを読めませんでした。")
+
+
 def load_translation_candidates_from_sources(config: dict[str, Any]) -> list[TranslationCandidate]:
     file_mode = get_section(config, "file_mode")
     candidates: list[TranslationCandidate] = []
@@ -1371,16 +1404,12 @@ def load_translation_candidates_from_sources(config: dict[str, Any]) -> list[Tra
         if not path.exists() or not path.is_file():
             raise RuntimeError(f"file モードの翻訳ファイルが見つかりません: {path}")
         text = path.read_text(encoding="utf-8", errors="ignore")
-        loaded = load_translation_candidates_from_text(text, str(path))
-        if not loaded:
-            raise RuntimeError(f"翻訳データとして読める JSON / TXT が見つかりませんでした: {path}")
+        loaded = load_translation_candidates_or_raise(text, str(path))
         candidates.extend(loaded)
 
     inline_text = cfg_str(file_mode, "inline_translation_text", "")
     if inline_text.strip():
-        loaded = load_translation_candidates_from_text(inline_text, "file_mode.inline_translation_text")
-        if not loaded:
-            raise RuntimeError("file モードの直接入力テキストから翻訳データを読めませんでした。")
+        loaded = load_translation_candidates_or_raise(inline_text, "file_mode.inline_translation_text")
         candidates.extend(loaded)
 
     return candidates
@@ -1388,6 +1417,13 @@ def load_translation_candidates_from_sources(config: dict[str, Any]) -> list[Tra
 
 def build_lang_json_text(data: dict[str, str]) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+
+
+def build_lang_bundle_json_text(entries: list[ExtractLangEntry]) -> str:
+    if len(entries) == 1:
+        return build_lang_json_text(entries[0].data)
+    bundled = {entry.source.namespace: entry.data for entry in entries}
+    return json.dumps(bundled, ensure_ascii=False, indent=2) + "\n"
 
 
 def write_output_text_file(path: Path, text: str) -> Path:
@@ -1678,6 +1714,13 @@ def discover_lang_sources(mod_root: Path) -> list[LangSource]:
     return found
 
 
+def group_lang_sources_by_namespace(sources: list[LangSource]) -> dict[str, list[LangSource]]:
+    grouped: dict[str, list[LangSource]] = {}
+    for source in sources:
+        grouped.setdefault(source.namespace, []).append(source)
+    return grouped
+
+
 def choose_best_lang_source(sources: list[LangSource], preferred_modid: str | None, source_priority: list[str], target_locale: str) -> LangSource | None:
     if not sources:
         return None
@@ -1703,34 +1746,35 @@ def choose_best_lang_source(sources: list[LangSource], preferred_modid: str | No
 def choose_namespace_for_extraction(mod_root: Path, explicit_namespace: str | None) -> str | None:
     if explicit_namespace:
         return explicit_namespace.strip() or None
-
-    # 抽出モードでは metadata が壊れていても lang 抽出を続けたいので、ここは警告止まりにします。
-    try:
-        return detect_mod_info(mod_root).mod_id
-    except Exception as e:
-        eprint(f"[WARN] mod メタデータを読めなかったため namespace 自動推定なしで続行します: {e}")
-        return None
+    return None
 
 
-def extract_lang_json_result(mod_root: Path, preferred_namespace: str | None, locale_priority: list[str]) -> ExtractLangResult:
+def choose_extract_lang_sources(mod_root: Path, preferred_namespace: str | None, locale_priority: list[str]) -> list[LangSource]:
     sources = discover_lang_sources(mod_root)
     if not sources:
         raise RuntimeError("lang ファイルが見つかりませんでした。assets/<namespace>/lang/ を確認してください。")
 
-    source = choose_best_lang_source(
-        sources=sources,
-        preferred_modid=preferred_namespace,
-        source_priority=locale_priority,
-        target_locale="",
-    )
-    if source is None:
-        raise RuntimeError("使える lang ファイルが見つかりませんでした。")
+    relevant = [src for src in sources if not preferred_namespace or src.namespace == preferred_namespace]
+    if not relevant:
+        raise RuntimeError(f"指定 namespace の lang ファイルが見つかりませんでした: {preferred_namespace}")
 
-    data = load_lang_source_dict(source)
+    selected: list[LangSource] = []
+    for namespace, namespace_sources in sorted(group_lang_sources_by_namespace(relevant).items()):
+        best = choose_best_lang_source(namespace_sources, namespace, locale_priority, "")
+        if best is not None:
+            selected.append(best)
+
+    if not selected:
+        raise RuntimeError("使える lang ファイルが見つかりませんでした。")
+    return selected
+
+
+def extract_lang_json_result(mod_root: Path, preferred_namespace: str | None, locale_priority: list[str]) -> ExtractLangResult:
+    selected_sources = choose_extract_lang_sources(mod_root, preferred_namespace, locale_priority)
+    entries = [ExtractLangEntry(source=source, data=load_lang_source_dict(source)) for source in selected_sources]
     return ExtractLangResult(
-        source=source,
-        data=data,
-        json_text=build_lang_json_text(data),
+        entries=entries,
+        json_text=build_lang_bundle_json_text(entries),
     )
 
 
@@ -1751,6 +1795,20 @@ def find_lang_source_for_locale(
     return sorted(candidates, key=lambda src: (0 if src.ext == ".json" else 1, str(src.path)))[0]
 
 
+def find_lang_sources_for_locale(
+    sources: list[LangSource],
+    target_locale: str,
+    preferred_namespace: str | None = None,
+) -> list[LangSource]:
+    wanted_locale = target_locale.strip().lower()
+    if not wanted_locale:
+        return []
+    candidates = [src for src in sources if src.locale == wanted_locale]
+    if preferred_namespace:
+        candidates = [src for src in candidates if src.namespace == preferred_namespace]
+    return sorted(candidates, key=lambda src: (src.namespace, 0 if src.ext == ".json" else 1, str(src.path)))
+
+
 def maybe_cancel_if_target_locale_exists(
     mod_root: Path,
     preferred_namespace: str | None,
@@ -1762,9 +1820,9 @@ def maybe_cancel_if_target_locale_exists(
         return
 
     target_locale = cfg_str(translation, "target_locale", "ja_jp")
-    source = find_lang_source_for_locale(discover_lang_sources(mod_root), target_locale, preferred_namespace)
-    if source is not None:
-        raise TargetLocaleAlreadyExists(target_locale.lower(), source, action_label)
+    sources = find_lang_sources_for_locale(discover_lang_sources(mod_root), target_locale, preferred_namespace)
+    if sources:
+        raise TargetLocaleAlreadyExists(target_locale.lower(), sources[0], action_label)
 
 
 PLACEHOLDER_PATTERN = re.compile(
@@ -1854,36 +1912,12 @@ def update_translation_memory(
             translation_memory[source_text] = translated_chunk[key]
 
 
-def validate_clipboard_translation_map(
-    mod_root: Path,
-    mod_info: ModInfo,
-    config: dict[str, Any],
-    clipboard_text: str,
-) -> dict[str, str]:
-    translation = get_section(config, "translation")
-    repair = cfg_bool(translation, "repair_broken_placeholders", True)
-
-    source = choose_translation_source(mod_root, mod_info, config)
-    print(f"[CLIPBOARD] 照合元 lang ファイル: {source.path}")
-    source_map = load_lang_source_dict(source)
-    translated_map = parse_lang_json_text(clipboard_text, "クリップボード")
-    cleaned_map, warnings = sanitize_translated_map(
-        source_map,
-        translated_map,
-        repair,
-        label="クリップボード JSON",
-    )
-    for w in warnings:
-        eprint(w)
-    return cleaned_map
-
-
-def select_translation_candidate_for_mod(
+def select_translation_candidate_for_source(
     candidates: list[TranslationCandidate],
     source_map: dict[str, str],
-    mod_info: ModInfo,
+    source: LangSource,
     repair: bool,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], list[str], TranslationCandidate]:
     matches: list[tuple[tuple[int, int, str], dict[str, str], list[str], TranslationCandidate]] = []
 
     for candidate in candidates:
@@ -1897,39 +1931,94 @@ def select_translation_candidate_for_mod(
         except Exception:
             continue
 
-        namespace_score = 0 if candidate.namespace_hint and candidate.namespace_hint == mod_info.mod_id else 1
-        label_score = 0 if mod_info.mod_id and mod_info.mod_id in candidate.label else 1
+        namespace_score = 0 if candidate.namespace_hint and candidate.namespace_hint == source.namespace else 1
+        label_score = 0 if source.namespace and source.namespace in candidate.label else 1
         score = (namespace_score, label_score, candidate.label)
         matches.append((score, cleaned_map, warnings, candidate))
 
     if not matches:
         raise RuntimeError(
-            "file モードの翻訳データから、この mod に一致する JSON を見つけられませんでした。"
+            f"翻訳データから namespace={source.namespace} locale={source.locale} に一致する JSON を見つけられませんでした。"
             " キー集合が元 lang と一致する候補を用意してください。"
         )
 
-    _, cleaned_map, warnings, candidate = sorted(matches, key=lambda item: item[0])[0]
-    print(f"[FILE] 使用する翻訳データ: {candidate.label}")
-    for warning in warnings:
-        eprint(warning)
-    return cleaned_map
+    return sorted(matches, key=lambda item: item[0])[0][1:]
 
 
-def load_file_mode_translation_map(
-    mod_root: Path,
-    mod_info: ModInfo,
+def choose_translation_sources_for_pack(mod_root: Path, config: dict[str, Any]) -> tuple[list[LangSource], list[LangSource]]:
+    translation = get_section(config, "translation")
+    target_locale = cfg_str(translation, "target_locale", "ja_jp")
+    source_priority = cfg_str_list(translation, "source_locale_priority", DEFAULT_SOURCE_LOCALE_PRIORITY)
+
+    sources = discover_lang_sources(mod_root)
+    if not sources:
+        raise RuntimeError("翻訳元に使える lang ファイルが見つかりませんでした。")
+
+    selected: list[LangSource] = []
+    skipped_target_only: list[LangSource] = []
+    for namespace, namespace_sources in sorted(group_lang_sources_by_namespace(sources).items()):
+        best = choose_best_lang_source(namespace_sources, namespace, source_priority, target_locale)
+        if best is None:
+            continue
+        if best.locale == target_locale:
+            skipped_target_only.append(best)
+            continue
+        selected.append(best)
+
+    if selected:
+        return selected, skipped_target_only
+
+    if skipped_target_only:
+        raise RuntimeError(
+            f"翻訳元に使える lang ファイルが見つかりませんでした。{target_locale}.json 以外の source locale がありません。"
+        )
+    raise RuntimeError("翻訳元に使える lang ファイルが見つかりませんでした。")
+
+
+def build_translated_entries_from_candidates(
+    sources: list[LangSource],
+    candidates: list[TranslationCandidate],
     config: dict[str, Any],
-) -> dict[str, str]:
+) -> list[TranslatedLangEntry]:
     translation = get_section(config, "translation")
     repair = cfg_bool(translation, "repair_broken_placeholders", True)
+    translated_entries: list[TranslatedLangEntry] = []
+    for source in sources:
+        print(f"[SOURCE] 照合元 lang ファイル: {source.path}")
+        source_map = load_lang_source_dict(source)
+        try:
+            translated_map, warnings, candidate = select_translation_candidate_for_source(candidates, source_map, source, repair)
+        except RuntimeError as e:
+            if len(sources) > 1:
+                raise RuntimeError(
+                    f"{e} 複数 namespace の mod なので、抽出結果の bundle JSON か、namespace ごとの辞書を含む翻訳データを用意してください。"
+                ) from e
+            raise
+        print(f"[SOURCE] 使用する翻訳データ: {candidate.label} -> {source.namespace}:{source.locale}")
+        for warning in warnings:
+            eprint(warning)
+        translated_entries.append(TranslatedLangEntry(source=source, data=translated_map))
+    return translated_entries
 
-    source = choose_translation_source(mod_root, mod_info, config)
-    print(f"[FILE] 照合元 lang ファイル: {source.path}")
-    source_map = load_lang_source_dict(source)
+
+def validate_clipboard_translation_entries(mod_root: Path, config: dict[str, Any], clipboard_text: str) -> list[TranslatedLangEntry]:
+    candidates = load_translation_candidates_or_raise(clipboard_text, "クリップボード")
+    sources, skipped = choose_translation_sources_for_pack(mod_root, config)
+    if skipped:
+        for source in skipped:
+            print(f"[INFO] {source.namespace} は既に {source.locale}.json しか無いため翻訳対象から外します: {source.path}")
+    return build_translated_entries_from_candidates(sources, candidates, config)
+
+
+def load_file_mode_translation_entries(mod_root: Path, config: dict[str, Any]) -> list[TranslatedLangEntry]:
     candidates = load_translation_candidates_from_sources(config)
     if not candidates:
         raise RuntimeError("file モードの翻訳データが指定されていません。翻訳ファイルか直接入力テキストを設定してください。")
-    return select_translation_candidate_for_mod(candidates, source_map, mod_info, repair)
+    sources, skipped = choose_translation_sources_for_pack(mod_root, config)
+    if skipped:
+        for source in skipped:
+            print(f"[INFO] {source.namespace} は既に {source.locale}.json しか無いため翻訳対象から外します: {source.path}")
+    return build_translated_entries_from_candidates(sources, candidates, config)
 
 
 def maybe_auto_fetch_source_lang_for_clipboard(
@@ -1944,7 +2033,7 @@ def maybe_auto_fetch_source_lang_for_clipboard(
 
     translation = get_section(config, "translation")
     locale_priority = cfg_str_list(translation, "source_locale_priority", DEFAULT_SOURCE_LOCALE_PRIORITY)
-    result = extract_lang_json_result(mod_root, mod_info.mod_id, locale_priority)
+    result = extract_lang_json_result(mod_root, None, locale_priority)
     method = set_clipboard_text(result.json_text)
     raise ClipboardSourceAutoFetched(str(reason), result, method)
 
@@ -2505,39 +2594,35 @@ def unpack_if_needed(input_path: Path) -> tuple[Path, tempfile.TemporaryDirector
     raise RuntimeError(f"入力が jar / zip / フォルダ のいずれでもありません: {input_path}")
 
 
-def choose_translation_source(mod_root: Path, mod_info: ModInfo, config: dict[str, Any]) -> LangSource:
-    translation = get_section(config, "translation")
-    target_locale = cfg_str(translation, "target_locale", "ja_jp")
-    source_priority = cfg_str_list(translation, "source_locale_priority", ["en_us", "en_gb"])
-
-    sources = discover_lang_sources(mod_root)
-    best = choose_best_lang_source(sources, mod_info.mod_id, source_priority, target_locale)
-    if not best:
-        raise RuntimeError("翻訳元に使える lang ファイルが見つかりませんでした。")
-    return best
-
-
-def build_translated_map(mod_root: Path, mod_info: ModInfo, config: dict[str, Any]) -> tuple[dict[str, str], str]:
+def build_translated_entries(mod_root: Path, mod_info: ModInfo, config: dict[str, Any]) -> list[TranslatedLangEntry]:
     translation = get_section(config, "translation")
     mode = cfg_str(translation, "mode", "ai").lower()
 
     if mode == "clipboard":
         try:
             text = get_clipboard_text()
-            return validate_clipboard_translation_map(mod_root, mod_info, config, text), "clipboard"
+            return validate_clipboard_translation_entries(mod_root, config, text)
         except Exception as e:
             maybe_auto_fetch_source_lang_for_clipboard(mod_root, mod_info, config, e)
             raise
 
     if mode == "file":
-        return load_file_mode_translation_map(mod_root, mod_info, config), "file"
+        return load_file_mode_translation_entries(mod_root, config)
 
     if mode == "ai":
-        source = choose_translation_source(mod_root, mod_info, config)
-        print(f"[AI] 元 lang ファイル: {source.path}")
-        source_map = load_lang_source_dict(source)
-        translated = translate_lang_dict_with_ai(source_map, source.locale, config, mod_info)
-        return translated, source.locale
+        sources, skipped = choose_translation_sources_for_pack(mod_root, config)
+        if skipped:
+            for source in skipped:
+                print(f"[INFO] {source.namespace} は既に {source.locale}.json しか無いため翻訳対象から外します: {source.path}")
+        translated_entries: list[TranslatedLangEntry] = []
+        total = len(sources)
+        for index, source in enumerate(sources, start=1):
+            prefix = f"[AI {index}/{total}]" if total > 1 else "[AI]"
+            print(f"{prefix} 元 lang ファイル: {source.path}")
+            source_map = load_lang_source_dict(source)
+            translated = translate_lang_dict_with_ai(source_map, source.locale, config, mod_info)
+            translated_entries.append(TranslatedLangEntry(source=source, data=translated))
+        return translated_entries
 
     raise RuntimeError(f"未対応の translation.mode です: {mode}")
 
@@ -2601,23 +2686,22 @@ def write_pack_files(
     icon_src: Path | None,
     mod_info: ModInfo,
     mod_root: Path,
-    translated_map: dict[str, str],
+    translated_entries: list[TranslatedLangEntry],
     target_locale: str,
-    source_locale: str,
     pack_format: int,
     supported_formats: dict[str, int] | None,
     description: str,
     config: dict[str, Any],
 ) -> None:
-    lang_dir = build_dir / "assets" / mod_info.mod_id / "lang"
-    lang_dir.mkdir(parents=True, exist_ok=True)
-
-    out_lang_path = lang_dir / f"{target_locale}.json"
-    out_lang_path.write_text(
-        json.dumps(translated_map, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    for entry in translated_entries:
+        lang_dir = build_dir / "assets" / entry.source.namespace / "lang"
+        lang_dir.mkdir(parents=True, exist_ok=True)
+        out_lang_path = lang_dir / f"{target_locale}.json"
+        out_lang_path.write_text(
+            json.dumps(entry.data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
 
     mcmeta = build_pack_mcmeta(description, pack_format, supported_formats)
     (build_dir / "pack.mcmeta").write_text(
@@ -2630,6 +2714,7 @@ def write_pack_files(
 
     api = get_section(config, "api")
     translation = get_section(config, "translation")
+    source_locales = ", ".join(f"{entry.source.namespace}:{entry.source.locale}" for entry in translated_entries)
 
     info_txt = (
         f"app_name={APP_NAME}\n"
@@ -2640,7 +2725,8 @@ def write_pack_files(
         f"mc_version_expr={mod_info.mc_version_expr}\n"
         f"target_locale={target_locale}\n"
         f"target_language_name={cfg_str(translation, 'target_language_name', 'Japanese (日本語)')}\n"
-        f"source_locale={source_locale}\n"
+        f"source_locale={translated_entries[0].source.locale if len(translated_entries) == 1 else 'multiple'}\n"
+        f"source_locales={source_locales}\n"
         f"source_mod_root={mod_root}\n"
         f"api_style={cfg_str(api, 'style', '')}\n"
         f"api_model={cfg_str(api, 'model', '')}\n"
@@ -2658,7 +2744,7 @@ def create_resource_pack(ctx: RuntimeContext, original_input_path: Path, mod_roo
 
     target_locale = cfg_str(translation, "target_locale", "ja_jp")
     mod_info = detect_mod_info(mod_root)
-    maybe_cancel_if_target_locale_exists(mod_root, mod_info.mod_id, ctx.config, "リソースパック生成")
+    maybe_cancel_if_target_locale_exists(mod_root, None, ctx.config, "リソースパック生成")
 
     if mod_info.mod_version in ("", "unknown", "${file.jarVersion}"):
         guessed_name, guessed_ver, guessed_mc = guess_from_folder_name(original_input_path if original_input_path.is_dir() else mod_root)
@@ -2675,7 +2761,7 @@ def create_resource_pack(ctx: RuntimeContext, original_input_path: Path, mod_roo
         min_ver, max_ver = infer_versions_from_expr(mod_info.mc_version_expr)
 
     pack_format, supported_formats = resolve_pack_formats_from_versions(min_ver, max_ver)
-    translated_map, source_locale = build_translated_map(mod_root, mod_info, ctx.config)
+    translated_entries = build_translated_entries(mod_root, mod_info, ctx.config)
 
     pack_name = create_pack_name(mod_info, ctx.config, target_locale)
     description = create_description(mod_info, ctx.config, target_locale)
@@ -2696,9 +2782,8 @@ def create_resource_pack(ctx: RuntimeContext, original_input_path: Path, mod_roo
         icon_src=icon_src,
         mod_info=mod_info,
         mod_root=mod_root,
-        translated_map=translated_map,
+        translated_entries=translated_entries,
         target_locale=target_locale,
-        source_locale=source_locale,
         pack_format=pack_format,
         supported_formats=supported_formats,
         description=description,
@@ -2745,10 +2830,18 @@ def run_extract_mode(ctx: RuntimeContext, cli_input_path: str | None, args: argp
         eprint(f"[ERROR] {e}")
         return 1
 
-    print(f"[OK] 抽出元: {result.source.path}")
-    print(f"[OK] namespace: {result.source.namespace}")
-    print(f"[OK] locale: {result.source.locale}")
-    print(f"[OK] キー数: {len(result.data)}")
+    if len(result.entries) == 1:
+        print(f"[OK] 抽出元: {result.source.path}")
+        print(f"[OK] namespace: {result.source.namespace}")
+        print(f"[OK] locale: {result.source.locale}")
+        print(f"[OK] キー数: {len(result.data)}")
+    else:
+        print(f"[OK] 抽出対象 namespace 数: {len(result.entries)}")
+        total_keys = 0
+        for entry in result.entries:
+            total_keys += len(entry.data)
+            print(f"[OK] - namespace={entry.source.namespace} locale={entry.source.locale} keys={len(entry.data)} path={entry.source.path}")
+        print(f"[OK] 合計キー数: {total_keys}")
 
     output_path = args.extract_output.strip()
     if file_mode_active:
@@ -2883,9 +2976,14 @@ def main(argv: list[str] | None = None) -> int:
 
     except ClipboardSourceAutoFetched as e:
         print("[INFO] クリップボードにこの mod 用の翻訳 JSON が見つからなかったため、元 lang JSON を自動取得しました。")
-        print(f"[INFO] 元 lang ファイル: {e.result.source.path}")
-        print(f"[INFO] namespace: {e.result.source.namespace}")
-        print(f"[INFO] locale: {e.result.source.locale}")
+        if len(e.result.entries) == 1:
+            print(f"[INFO] 元 lang ファイル: {e.result.source.path}")
+            print(f"[INFO] namespace: {e.result.source.namespace}")
+            print(f"[INFO] locale: {e.result.source.locale}")
+        else:
+            print(f"[INFO] 抽出対象 namespace 数: {len(e.result.entries)}")
+            for entry in e.result.entries:
+                print(f"[INFO] - namespace={entry.source.namespace} locale={entry.source.locale} path={entry.source.path}")
         print(f"[INFO] クリップボード: {e.clipboard_method}")
         print("[INFO] この JSON の値だけ翻訳して、もう一度実行してください。")
         return 0

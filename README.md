@@ -1,32 +1,71 @@
 # Babel Breaker
 
-Babel Breaker は、Minecraft mod の lang ファイルを翻訳し、そのまま使えるリソースパック ZIP を作るツールです。
+Babel Breaker は、Minecraft mod の `lang` を翻訳し、そのまま使えるリソースパック ZIP を作るツールです。
 
-GUI と CUI の両方に対応しています。
-
-- GUI で設定を編集できる
+- ブラウザ GUI と CUI の両方に対応
 - mod の `.jar` / `.zip` / 解凍済みフォルダを直接読める
-- 元 lang JSON を自動で取り出せる
-- クリップボード翻訳、ファイル翻訳、AI 翻訳で使える
-- Mac / Windows の両方を想定している
-
-## 1. まず何ができるのか
-
-- mod の中から翻訳元 lang を自動検出する
-- 元 lang JSON をクリップボードへコピーする
-- 元 lang JSON を `.json` ファイルとして保存する
-- 翻訳済み JSON を使ってリソースパック ZIP を作る
-- AI を使って値だけ翻訳し、そのまま ZIP を作る
-- GUI で `babel_breaker_app/config.toml` の全設定を編集する
+- 元 `lang` の自動抽出に対応
+- `clipboard` / `file` / `AI` の 3 モードを使える
+- 複数 namespace / 複数 source lang をまとめて処理できる
+- Mac / Windows を想定
 
 重要なのは、Minecraft の言語ファイルではキーを変えてはいけないことです。
 
 - キー: 内部 ID
 - 値: ゲーム内に表示される文章
 
-Babel Breaker は値だけを翻訳し、キーは維持します。
+このツールは、値だけを翻訳し、キーは維持します。
 
-## 2. いちばん簡単な始め方
+## 最初に読む
+
+迷ったら、まずは次のどちらかで使い始めるのが簡単です。
+
+### API なしで使う
+
+いちばん手軽な方法です。Babel Breaker で元 `lang` を抜き出し、外部 AI に貼って翻訳してもらい、戻ってきた JSON をリソースパック化します。複数 mod をまとめて扱いたい場合は `file` モードを使います。
+
+手順:
+
+1. GUI を開く
+2. mod の `.jar` / `.zip` を入れる
+3. `元 lang を取得` を押す
+4. 抽出された JSON を ChatGPT などの外部 AI に貼って、値だけ翻訳してもらう
+5. 戻ってきた JSON を `clipboard` モードか `file` モードで使う
+6. `リソースパック生成` を押す
+
+向いている使い方:
+
+- API キーを設定したくない
+- 翻訳文を自分で確認してから pack 化したい
+- まずは 1 本だけ試したい
+- 複数 mod をまとめて処理したいが、API は使いたくない
+
+使い分け:
+
+- `clipboard`: 1 件ずつ手早く戻したい時向け
+- `file`: 複数 mod をまとめて戻したい時向け
+
+### API ありで一気に使う
+
+API キーを設定して、抽出から翻訳、pack 化までそのまま進める方法です。
+
+手順:
+
+1. `[api]` を設定する
+2. GUI で mod を入れる
+3. `AI` モードを選ぶ
+4. 必要なら `translation.custom_prompt` を入れる
+5. `リソースパック生成` を押す
+
+向いている使い方:
+
+- 複数 mod をまとめて処理したい
+- 毎回コピペせずに進めたい
+- 用語統一や custom prompt もまとめて使いたい
+
+詳しい説明は下の `4. GUI の使い方`、`5. 翻訳モード`、`6. 詳しい使い方の例` 以降にあります。
+
+## 1. 最短の使い方
 
 ### Mac
 
@@ -34,13 +73,11 @@ Babel Breaker は値だけを翻訳し、キーは維持します。
 2. このフォルダを開く
 3. `launch_gui.command` を実行する
 
-もし `launch_gui.command` が開けない場合は、ターミナルで次を実行してください。
+開けない場合:
 
 ```bash
 python3 -m babel_breaker_app --gui
 ```
-
-`--gui` は Tk に依存しないブラウザ GUI を開くので、Mac の `tkinter` が壊れている環境でも使えます。
 
 ### Windows
 
@@ -48,21 +85,30 @@ python3 -m babel_breaker_app --gui
 2. このフォルダを開く
 3. `launch_gui.bat` を実行する
 
-うまく開かない場合は、コマンドプロンプトまたは PowerShell で次を実行してください。
+開けない場合:
 
 ```bash
 py -m babel_breaker_app --gui
 ```
 
-## 3. フォルダ構成
+## 2. まず何ができるか
 
-ルートには起動用ファイルだけを残し、本体コード・画像・設定は `babel_breaker_app/` にまとめています。`babel_breaker_app/config.toml` は無ければ作れます。
+- mod から翻訳元 `lang` を自動検出する
+- 元 `lang` JSON をクリップボードへコピーする
+- 元 `lang` JSON を `.json` ファイルとして保存する
+- 複数 namespace / 複数 lang をまとめて翻訳する
+- 翻訳済み JSON を使ってリソースパック ZIP を作る
+- AI を使って値だけ翻訳し、そのまま ZIP を作る
+- GUI で `babel_breaker_app/config.toml` の全設定を編集する
+
+## 3. フォルダ構成
 
 ```text
 BabelBreaker/
 ├─ launch_gui.command
 ├─ launch_gui.bat
 ├─ README.md
+├─ LICENSE
 ├─ babel_breaker_app/
 │  ├─ __main__.py
 │  ├─ config.toml
@@ -70,111 +116,86 @@ BabelBreaker/
 │  ├─ web_gui.py
 │  ├─ gui_shared.py
 │  └─ assets/
-│     ├─ icon.png         ← リソースパック用アイコン
-│     └─ favicon.png      ← ブラウザ GUI のタブアイコン
-└─ _babel_breaker_output/ ← 自動作成
+│     ├─ icon.png
+│     └─ favicon.png
+└─ _babel_breaker_output/   ← 自動作成
 ```
-
-ルートには、まず使う `launch_gui.command` / `launch_gui.bat` と `README.md` が見えるようにしています。
 
 `babel_breaker_app/config.toml` が無い場合:
 
-- CUI で `python3 -m babel_breaker_app` を実行すると、コメント付きの見本を自動生成します
-- GUI で「設定を保存」しても、説明付きの `babel_breaker_app/config.toml` を作成します
+- `python3 -m babel_breaker_app` を 1 回実行すると、説明付き見本を自動生成します
+- GUI の `設定を保存` でも作成できます
 
 ## 4. GUI の使い方
 
-`--gui` はローカルのブラウザ GUI を起動します。ローカル URL が表示され、通常は自動でブラウザが開きます。ブラウザのタブアイコンには `babel_breaker_app/assets/favicon.png` を使います。
+`--gui` はローカルのブラウザ GUI を起動します。通常は自動でブラウザが開きます。タブアイコンには `babel_breaker_app/assets/favicon.png` を使います。
 
-新しい GUI は、まずシンプルな操作だけを見せる構成です。
+基本の流れ:
 
-1. mod の `.jar` / `.zip` を画面にドラッグ＆ドロップする
+1. mod の `.jar` / `.zip` をドラッグ＆ドロップする
 2. `clipboard` / `file` / `AI` を選ぶ
 3. `リソースパック生成` か `元 lang を取得` を押す
 
-普段使わない設定は、`詳細設定を開く` を押すまで出ません。`file モード入力` だけは、`file` を選んだ時だけ中央に出ます。
+GUI の考え方:
 
-`AI` と `file` モードでは複数ファイルをまとめて落とせます。処理中に追加したファイルはキューに積まれ、残りが順番に処理されます。`clipboard` モードは常に 1 件ずつで、キューは使いません。
+- 普段使わない設定は `詳細設定を開く` まで出ません
+- `file モード入力` だけは `file` モードを選んだ時だけ中央に出ます
+- `AI` と `file` モードは複数 mod をキューで処理できます
+- `clipboard` モードは 1 件ずつで、キューは使いません
+- 実行中は画面上部のプログレスバーで進捗、完了数、失敗数を確認できます
 
-ブラウザ GUI を更新した直後で挙動が古いままに見える場合は、タブを閉じて開き直すか、ブラウザをハードリロードしてください。
-
-### GUI でできること
+GUI でできること:
 
 - mod JAR / ZIP のドラッグ＆ドロップ入力
 - `AI` / `file` モードでの複数 mod キュー投入
-- `AI` / `file` モードでの処理中追加キュー
+- 処理中の追加キュー
 - ボタンからのファイル選択 / フォルダ選択
 - `リソースパック生成`
-  今の設定で本番処理を実行します
 - `元 lang を取得`
-  mod の中から翻訳元 lang を自動抽出します
-- 実行状況プログレスバー
-  実行中の件数、完了数、失敗数を画面上部で確認できます
 - `設定を保存`
-  GUI の内容を `babel_breaker_app/config.toml` に保存します
 - `設定フォルダを開く`
-  設定ファイルの場所を開きます
 - `出力先を開く`
-  出力フォルダを開きます
 - `README を開く`
-  この説明を開きます
-- 画面下部の `© IGNORANZ PROJECT` / `GitHub`
-  X と GitHub リポジトリを開きます
+- 画面下部の `© IGNORANZ PROJECT` / `GitHub` リンク
 
-### 詳細設定に入っているもの
+ブラウザ GUI を更新した直後で挙動が古いままに見える場合は、タブを閉じて開き直すか、ハードリロードしてください。
 
-- 出力フォルダ
-- locale
-- AI 追加指示
-- API 設定
-- pack 設定
-- clipboard 補助設定
-- 抽出時の保存先や namespace 指定
-- ログ表示
-
-### GUI での基本運用
-
-- `clipboard` モードでは `.jar` / `.zip` を 1 件だけ選んで処理する
-- `AI` / `file` モードでは `.jar` / `.zip` をキューへ複数入れたまま `リソースパック生成` を押せる
-- `AI` / `file` モードでは、途中で別の mod を追加しても残りへ順番に積まれる
-- `AI` / `file` モードでは、不要な項目をキュー一覧から削除できる
-
-## 5. 3 つの翻訳モード
+## 5. 翻訳モード
 
 ### `clipboard` モード
 
-自分で翻訳済み JSON を用意するモードです。
+自分で翻訳済み JSON を用意して、クリップボード経由で使うモードです。
 
 流れ:
 
 1. `元 lang を取得` で元 JSON を抜き出す
 2. JSON の値だけ翻訳する
 3. 翻訳済み JSON をクリップボードへコピーする
-4. `translation.mode = "clipboard"` にして生成する
+4. `translation.mode = "clipboard"` で生成する
 
 特徴:
 
-- 自分で翻訳内容を厳密に調整しやすい
-- 別の AI、翻訳サービス、手動翻訳と組み合わせやすい
-- キー照合を行うので、足りないキーや余計なキーがある JSON はそのまま通りません
-- GUI では 1 件ずつ処理します。キューは使いません
+- 手動翻訳や別の翻訳サービスと組み合わせやすい
+- キー照合を行うため、欠落キーや余計なキーはそのまま通りません
+- GUI では 1 件ずつ処理します
+- 複数 namespace の mod では、bundle JSON をそのまま使えます
 
-さらに、clipboard モードでは次の補助があります。
+補助動作:
 
-- クリップボードにこの mod 用の JSON が無い
+- クリップボードに対応 JSON が無い
 - JSON が壊れている
 - キーが合わない
 
-この場合、既定では対応する元 lang JSON を自動取得してクリップボードへ入れ直します。
+この場合、既定では mod に対応する元 `lang` JSON を自動取得してクリップボードへ入れ直します。
 
-自動取得を切りたい場合:
+自動取得を切る方法:
 
-- GUI の `詳細設定` 内でオフにする
-- CUI なら `-a` または `--no-auto-fetch-source-lang`
+- GUI の `詳細設定` でオフ
+- CUI の `-a` / `--no-auto-fetch-source-lang`
 
 ### `file` モード
 
-翻訳済みのファイルや、直接貼り付けたテキストを使うモードです。
+翻訳済みファイルや、直接貼り付けたテキストを使うモードです。
 
 流れ:
 
@@ -185,29 +206,29 @@ BabelBreaker/
 特徴:
 
 - `.json` や `.txt` を複数指定できます
-- 1 ファイルに複数 mod 分の辞書が入っていても、元 lang のキー集合から自動探索します
+- 1 ファイルに複数 mod 分の辞書が入っていても自動探索します
+- 1 つの mod が複数 namespace / 複数 source lang を持っていても、bundle JSON をまとめて扱えます
 - JSON を直接貼り付けても使えます
-- `元 lang を取得` を押した時は、既定で `.json` ファイルとして保存し、クリップボードは使いません
-- 保存先を空にした場合は `_babel_breaker_output/_extracted_lang/` に自動保存します
+- `元 lang を取得` は既定で `.json` 保存のみで、クリップボードは使いません
+- 保存先未指定なら `_babel_breaker_output/_extracted_lang/` に自動保存します
 
 ### `ai` モード
 
-元 lang を自動検出して AI で値だけ翻訳するモードです。
+元 `lang` を自動検出して AI で値だけ翻訳するモードです。
 
 特徴:
 
-- 翻訳から pack 化まで一気に進められる
-- 同じ原文には同じ訳語を優先する
-- mod の世界観、口調、固有名詞を守る方向でプロンプトを作る
-- アニメやゲーム原作 mod では既存作品の用語を優先させやすい
-- 既に `target_locale` が mod に入っている場合は、既定で抽出や生成を中止する
+- 翻訳から pack 化まで一気に進められます
+- 同じ原文には同じ訳語を優先します
+- mod の世界観、口調、固有名詞を守る方向でプロンプトを作ります
+- アニメやゲーム原作 mod では既存作品の用語を優先しやすくしています
+- 複数 namespace / 複数 source lang を持つ mod でも、選ばれた source をまとめて翻訳します
+- 既に `target_locale` が mod に入っている場合は、既定で抽出や生成を中止します
 
-AI モードでは、次の設定が重要です。
+重要な設定:
 
 - `translation.enforce_consistent_terms = true`
-  同じ原文に対して同じ訳語を使いやすくします
 - `translation.custom_prompt`
-  作品ごとの用語ルールを足せます
 
 例:
 
@@ -221,19 +242,86 @@ UI 文言は短く自然にする。
 """
 ```
 
-## 6. 元 lang JSON を取り出す
+## 6. 詳しい使い方の例
 
-抽出は GUI から行うのがいちばん簡単です。
+### API を使わず、外部 AI に貼って翻訳してもらう
 
-GUI では次を設定できます。
+この方法なら、Babel Breaker 側に API 設定は不要です。1 本だけなら `clipboard`、複数 mod をまとめるなら `file` が向いています。
+
+流れ:
+
+1. GUI を開く
+2. mod の `.jar` / `.zip` を入れる
+3. `元 lang を取得` を押す
+4. 抽出された JSON を外部 AI に渡して翻訳してもらう
+5. 戻ってきた JSON を `clipboard` モードか `file` モードで使う
+6. `リソースパック生成` を押す
+
+外部 AI への依頼例:
+
+```text
+この JSON は Minecraft mod の lang です。
+キーは絶対に変更しないでください。
+値だけ自然な日本語に翻訳してください。
+プレースホルダ、改行、色コードは維持してください。
+JSON 以外は返さないでください。
+```
+
+`clipboard` モードで戻す場合:
+
+1. 外部 AI の返答 JSON をそのままコピーする
+2. GUI で `clipboard` を選ぶ
+3. `リソースパック生成` を押す
+
+`file` モードで戻す場合:
+
+1. 外部 AI の返答を `.json` や `.txt` として保存する
+2. GUI で `file` を選ぶ
+3. `file モード入力` にそのファイルを追加する
+4. `リソースパック生成` を押す
+
+`file` モードで複数 mod をまとめて戻す場合:
+
+1. 複数 mod から `元 lang を取得` していく
+2. それぞれの JSON を外部 AI に渡して翻訳してもらう
+3. 返ってきた JSON を 1 個以上の `.json` / `.txt` にまとめる
+4. GUI で `file` を選ぶ
+5. 翻訳対象の mod を複数キューへ入れる
+6. `file モード入力` に翻訳ファイル群を追加する
+7. `リソースパック生成` を押す
+
+`file` モードは、1 ファイルに複数 mod 分の翻訳データが入っていても自動探索できます。
+
+複数 namespace の mod では、抽出結果が bundle JSON になることがあります。その場合も同じで、JSON 全体の値だけを翻訳すればそのまま使えます。
+
+### AI モードを使って一気に翻訳する
+
+この方法は API 設定が必要ですが、抽出から翻訳、pack 化まで一気に進められます。
+
+1. `[api]` を設定する
+2. `AI` モードを選ぶ
+3. 必要なら `translation.custom_prompt` に作品用語ルールを書く
+4. `リソースパック生成` を押す
+
+## 7. 元 lang を取り出す
+
+GUI から行うのが最も簡単です。
+
+GUI で設定できる項目:
 
 - 保存先ファイル
 - locale 優先順
 - namespace 指定
 - クリップボードへも入れるか、ファイルだけにするか
-  `file` モードでは常にファイル保存のみになり、この項目は自動で固定されます
 
-### CUI で抽出する場合
+`file` モードでは常にファイル保存のみになり、この項目は自動で固定されます。
+
+複数 namespace がある mod では、抽出結果は bundle JSON になります。
+
+- `file` モードではそのまま使えます
+- `clipboard` モードでも、その bundle JSON の値だけ翻訳すれば mod 全体に対応できます
+
+### CUI で抽出
 
 ```bash
 python3 -m babel_breaker_app --extract-lang "/path/to/SomeMod.jar"
@@ -248,13 +336,9 @@ python3 -m babel_breaker_app -x "/path/to/SomeMod.jar"
 よく使うオプション:
 
 - `-o`, `--extract-output`
-  抽出 JSON をファイル保存する
 - `-c`, `--extract-no-clipboard`
-  クリップボードへ入れず、ファイルだけ保存する
 - `-l`, `--extract-locale`
-  優先 locale を指定する
 - `-n`, `--extract-namespace`
-  優先 namespace を指定する
 
 例:
 
@@ -262,9 +346,9 @@ python3 -m babel_breaker_app -x "/path/to/SomeMod.jar"
 python3 -m babel_breaker_app -x "/path/to/SomeMod.jar" -o "/path/to/source_lang.json"
 ```
 
-## 7. CUI もそのまま使える
+## 8. CUI の使い方
 
-GUI を追加しても、従来の CUI は残しています。
+GUI を追加しても、CUI はそのまま使えます。
 
 ### GUI 起動
 
@@ -286,20 +370,18 @@ python3 -m babel_breaker_app
 
 ### `input/` 自動探索を使う
 
-`general.input_path` が空で、CLI 引数も無い場合は `input_scan` 設定が使われます。
+`general.input_path` が空で、CLI 引数も無い場合は `input_scan` 設定を使います。
 
 ```text
 input/
 └─ SomeMod.jar
 ```
 
-その後:
-
 ```bash
 python3 -m babel_breaker_app
 ```
 
-## 8. 必要なもの
+## 9. 必要なもの
 
 ### 必須
 
@@ -308,11 +390,8 @@ python3 -m babel_breaker_app
 ### 推奨
 
 - Python 3.11 以上
-  `tomllib` が標準で使えるため設定読込が楽です
 - `Pillow`
-  PNG 以外の画像を `pack.png` に変換したい場合に便利です
 - `tomli`
-  Python 3.10 系で必要になることがあります
 
 インストール例:
 
@@ -328,18 +407,9 @@ python3 -m pip install pillow tomli
 py -m pip install pillow tomli
 ```
 
-### GUI の実装について
+## 10. 設定ファイル
 
-GUI はブラウザ版に統一しています。
-
-- `python3 -m babel_breaker_app --gui`
-  最も安定する GUI です
-
-Mac / Windows のどちらでも `--gui` を使ってください。
-
-## 9. 設定ファイルについて
-
-`babel_breaker_app/config.toml` は普段使う設定を保存するファイルです。
+普段使う設定は `babel_breaker_app/config.toml` に保存されます。
 
 GUI で全部編集できますが、手で編集しても構いません。
 
@@ -370,9 +440,9 @@ api_key_env = "GEMINI_API_KEY"
 
 設定ファイルが無い時に生成される内容は、説明コメント付きです。
 
-## 10. AI 利用時の注意
+## 11. AI 利用時の注意
 
-API モードでは `[api]` の設定が必要です。
+AI モードでは `[api]` の設定が必要です。
 
 例:
 
@@ -403,11 +473,9 @@ export OPENAI_API_KEY="your_api_key"
 $env:OPENAI_API_KEY="your_api_key"
 ```
 
-## 11. トラブル時
+## 12. トラブルシュート
 
-### `babel_breaker_app/config.toml` が無いと言われる
-
-次のどちらかを行ってください。
+### `config.toml` が無いと言われる
 
 - GUI を起動して `設定を保存` を押す
 - CUI で `python3 -m babel_breaker_app` を 1 回実行する
@@ -415,35 +483,52 @@ $env:OPENAI_API_KEY="your_api_key"
 ### GUI が起動しない
 
 - Python 3.10 以上か確認する
-- まずはターミナルから `python3 -m babel_breaker_app --gui` を試す
-- ブラウザが自動で開かない場合は、表示された `http://127.0.0.1:...` を手で開く
-- それでも起動しない場合は、そのままのログを確認する
+- `python3 -m babel_breaker_app --gui` を試す
+- 自動で開かなければ、表示された `http://127.0.0.1:...` を手で開く
+- それでもだめなら、ターミナルのログを確認する
 
 ### GUI のボタンやドラッグ＆ドロップが反応しない
 
-- いったんブラウザタブを閉じて、GUI を開き直す
-- ブラウザをハードリロードする
-- 別タブで古い GUI を開いたままにしていないか確認する
+- ブラウザタブを閉じて開き直す
+- ハードリロードする
+- 古い GUI タブを開いたままにしていないか確認する
 
-### AI モードで API エラーになる
+### 一部しか翻訳されない
 
-- API キー環境変数名が正しいか確認する
-- `api.style` と `api.model` の組み合わせを確認する
-- OpenAI 互換 API の場合は `api.url` を確認する
+旧バージョンでは 1 つの `lang` しか見ないことがありました。現在は複数 namespace / 複数 source lang をまとめて処理します。
 
-### clipboard モードで失敗する
+それでも一部が原文のままなら、主な原因は次です。
+
+- AI モードでプレースホルダ不一致が起き、原文維持に戻された
+- `clipboard` / `file` モードで bundle JSON の一部 namespace が欠けている
+- mod 側に既に `target_locale` があり、中止設定が効いている
+
+### `clipboard` モードで失敗する
 
 - クリップボードの JSON がその mod に対応しているか確認する
 - 値だけ翻訳し、キーを変えていないか確認する
-- 既定では元 lang JSON の自動取得が動くので、ログも確認する
+- 複数 namespace mod では bundle JSON 全体を翻訳しているか確認する
 
-### file モードで失敗する
+### `file` モードで失敗する
 
 - `file モード入力` に指定したファイルが実在するか確認する
-- 1 ファイルに複数 mod 分の辞書を入れる場合は、各 mod の辞書が分かれる形で入っているか確認する
+- 1 ファイルに複数 mod 分の辞書を入れる場合は、各辞書が分かれているか確認する
 - 値だけ翻訳し、キーを変えていないか確認する
 
-## 12. 補足
+## 13. プロジェクト情報
 
-- いま使うなら `python3 -m babel_breaker_app --extract-lang` を使えば十分です
 - GUI と CUI は同じ本体処理を呼んでいます
+- GUI 下部の `© IGNORANZ PROJECT` は X へのリンクです
+- GUI 下部の `GitHub` はこのリポジトリへのリンクです
+
+### Links
+
+- X: https://x.com/IGNORANZ_P
+- GitHub: https://github.com/IGNORANZ-PROJECT/BabelBreaker
+
+## 14. License
+
+This project is licensed under the MIT License.
+
+- License text: [LICENSE](./LICENSE)
+- Copyright: `© 2026 IGNORANZ PROJECT`
