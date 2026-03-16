@@ -81,6 +81,7 @@ target_locale = "ja_jp"
 # - すでに十分に翻訳されている namespace は抽出や生成の対象から外します
 # - 一部だけ未翻訳なら、既存訳を残しつつ不足分だけ補完します
 # - mod 全体で補完する必要が無ければ、抽出や生成を中止します
+# - ただし target_locale しか無い namespace は、その既存 lang を source fallback として使えます
 cancel_if_target_locale_exists = true
 
 # AI に説明するための人間向けの言語名です。
