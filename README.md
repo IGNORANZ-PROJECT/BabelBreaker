@@ -223,7 +223,8 @@ GUI でできること:
 - mod の世界観、口調、固有名詞を守る方向でプロンプトを作ります
 - アニメやゲーム原作 mod では既存作品の用語を優先しやすくしています
 - 複数 namespace / 複数 source lang を持つ mod でも、選ばれた source をまとめて翻訳します
-- 既に `target_locale` が mod に入っている場合は、既定で抽出や生成を中止します
+- 既に `target_locale` がある場合でも、一部未翻訳なら既存訳を残したまま不足分だけ翻訳します
+- `target_locale` が十分に埋まっている namespace は、既定で安全にスキップします
 
 重要な設定:
 
@@ -247,6 +248,8 @@ UI 文言は短く自然にする。
 ### API を使わず、外部 AI に貼って翻訳してもらう
 
 この方法なら、Babel Breaker 側に API 設定は不要です。1 本だけなら `clipboard`、複数 mod をまとめるなら `file` が向いています。
+
+すでに mod 側に `target_locale` が一部入っている場合でも、既定では未翻訳の不足分だけを抽出して外部 AI に渡せます。
 
 流れ:
 
@@ -294,6 +297,8 @@ JSON 以外は返さないでください。
 
 複数 namespace の mod では、抽出結果が bundle JSON になることがあります。その場合も同じで、JSON 全体の値だけを翻訳すればそのまま使えます。
 
+また、既存の `target_locale` が部分的に入っている mod では、`cancel_if_target_locale_exists = true` のままなら未翻訳分だけが抽出されます。戻す時も既存訳を残したまま不足分だけ補完できます。
+
 ### AI モードを使って一気に翻訳する
 
 この方法は API 設定が必要ですが、抽出から翻訳、pack 化まで一気に進められます。
@@ -320,6 +325,11 @@ GUI で設定できる項目:
 
 - `file` モードではそのまま使えます
 - `clipboard` モードでも、その bundle JSON の値だけ翻訳すれば mod 全体に対応できます
+
+`translation.cancel_if_target_locale_exists = true` の場合:
+
+- 既に十分に翻訳されている namespace は抽出対象から外れます
+- 一部だけ未翻訳の namespace は、未翻訳分だけ JSON に出ます
 
 ### CUI で抽出
 
@@ -438,6 +448,12 @@ model = "gemini-2.5-flash"
 api_key_env = "GEMINI_API_KEY"
 ```
 
+`cancel_if_target_locale_exists = true` の意味:
+
+- 既存の `target_locale` が十分に埋まっている namespace は上書きしません
+- 既存の `target_locale` が一部だけ未翻訳なら、その不足分だけ補完します
+- mod 全体で補完する必要が無い時だけ、中止します
+
 設定ファイルが無い時に生成される内容は、説明コメント付きです。
 
 ## 11. AI 利用時の注意
@@ -501,7 +517,7 @@ $env:OPENAI_API_KEY="your_api_key"
 
 - AI モードでプレースホルダ不一致が起き、原文維持に戻された
 - `clipboard` / `file` モードで bundle JSON の一部 namespace が欠けている
-- mod 側に既に `target_locale` があり、中止設定が効いている
+- mod 側の `target_locale` がすでに十分に埋まっていて、安全装置でその namespace が外れている
 
 ### `clipboard` モードで失敗する
 

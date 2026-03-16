@@ -92,7 +92,7 @@ import tempfile
 import urllib.error
 import urllib.request
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -199,9 +199,11 @@ mode = "clipboard"
 # target_locale = "de_de" -> de_de.json
 target_locale = "ja_jp"
 
-# mod 側に target_locale の lang が既に入っていた場合は、
-# 抽出や生成をそこで止める安全装置です。
-# すでに公式翻訳や同梱翻訳がある mod を二重に処理しないためのものです。
+# mod 側に target_locale の lang が既に入っていた場合の安全装置です。
+# true のとき:
+# - すでに十分に翻訳されている namespace は抽出や生成の対象から外します
+# - 一部だけ未翻訳なら、既存訳を残しつつ不足分だけ補完します
+# - mod 全体で補完する必要が無ければ、抽出や生成を中止します
 cancel_if_target_locale_exists = true
 
 # AI に説明するための人間向けの言語名です。
@@ -583,6 +585,16 @@ class TranslatedLangEntry:
     data: dict[str, str]
 
 
+@dataclass
+class TranslationSourcePlan:
+    source: LangSource
+    source_data: dict[str, str]
+    pending_source_data: dict[str, str]
+    existing_target_source: LangSource | None = None
+    preserved_target_data: dict[str, str] = field(default_factory=dict)
+    reused_source_key_count: int = 0
+
+
 class ClipboardSourceAutoFetched(Exception):
     def __init__(self, reason: str, result: ExtractLangResult, clipboard_method: str):
         super().__init__(reason)
@@ -597,7 +609,7 @@ class TargetLocaleAlreadyExists(Exception):
         self.source = source
         self.action_label = action_label
         super().__init__(
-            f"mod には既に {target_locale}.json があるため、{action_label} をキャンセルしました: {source.path}"
+            f"mod には既に {target_locale}.json があり、未翻訳の不足分も見つからないため、{action_label} をキャンセルしました: {source.path}"
         )
 
 
@@ -1769,15 +1781,6 @@ def choose_extract_lang_sources(mod_root: Path, preferred_namespace: str | None,
     return selected
 
 
-def extract_lang_json_result(mod_root: Path, preferred_namespace: str | None, locale_priority: list[str]) -> ExtractLangResult:
-    selected_sources = choose_extract_lang_sources(mod_root, preferred_namespace, locale_priority)
-    entries = [ExtractLangEntry(source=source, data=load_lang_source_dict(source)) for source in selected_sources]
-    return ExtractLangResult(
-        entries=entries,
-        json_text=build_lang_bundle_json_text(entries),
-    )
-
-
 def find_lang_source_for_locale(
     sources: list[LangSource],
     target_locale: str,
@@ -1820,9 +1823,36 @@ def maybe_cancel_if_target_locale_exists(
         return
 
     target_locale = cfg_str(translation, "target_locale", "ja_jp")
-    sources = find_lang_sources_for_locale(discover_lang_sources(mod_root), target_locale, preferred_namespace)
-    if sources:
-        raise TargetLocaleAlreadyExists(target_locale.lower(), sources[0], action_label)
+    repair = cfg_bool(translation, "repair_broken_placeholders", True)
+    source_priority = cfg_str_list(translation, "source_locale_priority", DEFAULT_SOURCE_LOCALE_PRIORITY)
+    all_sources = discover_lang_sources(mod_root)
+    if not all_sources:
+        return
+
+    relevant_sources = [src for src in all_sources if not preferred_namespace or src.namespace == preferred_namespace]
+    if not relevant_sources:
+        return
+
+    first_existing_target: LangSource | None = None
+    for namespace, namespace_sources in sorted(group_lang_sources_by_namespace(relevant_sources).items()):
+        existing_target = find_lang_source_for_locale(namespace_sources, target_locale, namespace)
+        if existing_target is None:
+            return
+        if first_existing_target is None:
+            first_existing_target = existing_target
+
+        best = choose_best_lang_source(namespace_sources, namespace, source_priority, target_locale)
+        if best is None:
+            return
+        if best.locale == target_locale:
+            continue
+
+        plan = build_translation_source_plan(best, existing_target, repair)
+        if plan.pending_source_data:
+            return
+
+    if first_existing_target is not None:
+        raise TargetLocaleAlreadyExists(target_locale.lower(), first_existing_target, action_label)
 
 
 PLACEHOLDER_PATTERN = re.compile(
@@ -1838,6 +1868,104 @@ def extract_placeholder_tokens(text: str) -> list[str]:
     tokens.extend(["<TAB>"] * text.count("\t"))
     tokens.extend(["<CR>"] * text.count("\r"))
     return sorted(tokens)
+
+
+def existing_target_value_needs_translation(source_text: str, target_text: str | None, repair: bool) -> bool:
+    if target_text is None:
+        return True
+    if not target_text.strip():
+        return True
+    if repair and extract_placeholder_tokens(source_text) != extract_placeholder_tokens(target_text):
+        return True
+    return normalize_whitespace(source_text) == normalize_whitespace(target_text)
+
+
+def build_translation_source_plan(
+    source: LangSource,
+    existing_target_source: LangSource | None,
+    repair: bool,
+) -> TranslationSourcePlan:
+    source_data = load_lang_source_dict(source)
+    if existing_target_source is None:
+        return TranslationSourcePlan(
+            source=source,
+            source_data=source_data,
+            pending_source_data=dict(source_data),
+        )
+
+    existing_target_data = load_lang_source_dict(existing_target_source)
+    pending_source_data: dict[str, str] = {}
+    reused_source_key_count = 0
+    for key, source_text in source_data.items():
+        if existing_target_value_needs_translation(source_text, existing_target_data.get(key), repair):
+            pending_source_data[key] = source_text
+        else:
+            reused_source_key_count += 1
+
+    return TranslationSourcePlan(
+        source=source,
+        source_data=source_data,
+        pending_source_data=pending_source_data,
+        existing_target_source=existing_target_source,
+        preserved_target_data=dict(existing_target_data),
+        reused_source_key_count=reused_source_key_count,
+    )
+
+
+def build_extract_lang_entries(
+    mod_root: Path,
+    preferred_namespace: str | None,
+    locale_priority: list[str],
+    config: dict[str, Any],
+) -> list[ExtractLangEntry]:
+    translation = get_section(config, "translation")
+    target_locale = cfg_str(translation, "target_locale", "ja_jp")
+    repair = cfg_bool(translation, "repair_broken_placeholders", True)
+    skip_completed_target = cfg_bool(translation, "cancel_if_target_locale_exists", True)
+
+    selected_sources = choose_extract_lang_sources(mod_root, preferred_namespace, locale_priority)
+    all_sources = discover_lang_sources(mod_root)
+    grouped_all_sources = group_lang_sources_by_namespace(all_sources)
+
+    entries: list[ExtractLangEntry] = []
+    for source in selected_sources:
+        existing_target = find_lang_source_for_locale(
+            grouped_all_sources.get(source.namespace, []),
+            target_locale,
+            source.namespace,
+        )
+        if not skip_completed_target or existing_target is None or source.locale == target_locale:
+            entries.append(ExtractLangEntry(source=source, data=load_lang_source_dict(source)))
+            continue
+
+        plan = build_translation_source_plan(source, existing_target, repair)
+        if not plan.pending_source_data:
+            print(
+                f"[INFO] {source.namespace} は既存の {target_locale}.json で十分に埋まっているため、元 lang 抽出から外します: {existing_target.path}"
+            )
+            continue
+        if plan.reused_source_key_count:
+            print(
+                f"[INFO] {source.namespace} は既存の {target_locale}.json を再利用し、未翻訳 {len(plan.pending_source_data)} 件だけ抽出します。"
+            )
+        entries.append(ExtractLangEntry(source=source, data=plan.pending_source_data))
+
+    if not entries:
+        raise RuntimeError("抽出する必要のある未翻訳 lang が見つかりませんでした。")
+    return entries
+
+
+def extract_lang_json_result(
+    mod_root: Path,
+    preferred_namespace: str | None,
+    locale_priority: list[str],
+    config: dict[str, Any],
+) -> ExtractLangResult:
+    entries = build_extract_lang_entries(mod_root, preferred_namespace, locale_priority, config)
+    return ExtractLangResult(
+        entries=entries,
+        json_text=build_lang_bundle_json_text(entries),
+    )
 
 
 def sanitize_translated_map(
@@ -1912,15 +2040,41 @@ def update_translation_memory(
             translation_memory[source_text] = translated_chunk[key]
 
 
+def build_translation_memory_seed(
+    source_map: dict[str, str],
+    pending_source_map: dict[str, str],
+    preserved_target_data: dict[str, str],
+) -> dict[str, str]:
+    seed: dict[str, str] = {}
+    pending_keys = set(pending_source_map.keys())
+    for key, source_text in source_map.items():
+        if key in pending_keys:
+            continue
+        translated_text = preserved_target_data.get(key)
+        if isinstance(translated_text, str) and translated_text.strip():
+            seed.setdefault(source_text, translated_text)
+    return seed
+
+
 def select_translation_candidate_for_source(
     candidates: list[TranslationCandidate],
     source_map: dict[str, str],
     source: LangSource,
     repair: bool,
+    pending_source_map: dict[str, str] | None = None,
+    preserved_target_data: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], list[str], TranslationCandidate]:
-    matches: list[tuple[tuple[int, int, str], dict[str, str], list[str], TranslationCandidate]] = []
+    matches: list[tuple[tuple[int, int, int, str], dict[str, str], list[str], TranslationCandidate]] = []
+    allow_partial_merge = (
+        pending_source_map is not None
+        and preserved_target_data is not None
+        and pending_source_map
+        and pending_source_map != source_map
+    )
 
     for candidate in candidates:
+        namespace_score = 0 if candidate.namespace_hint and candidate.namespace_hint == source.namespace else 1
+        label_score = 0 if source.namespace and source.namespace in candidate.label else 1
         try:
             cleaned_map, warnings = sanitize_translated_map(
                 source_map,
@@ -1928,13 +2082,28 @@ def select_translation_candidate_for_source(
                 repair,
                 label=f"file モード候補 ({candidate.label})",
             )
+            score = (0, namespace_score, label_score, candidate.label)
+            matches.append((score, cleaned_map, warnings, candidate))
+        except Exception:
+            pass
+
+        if not allow_partial_merge:
+            continue
+
+        try:
+            cleaned_partial_map, warnings = sanitize_translated_map(
+                pending_source_map,
+                candidate.data,
+                repair,
+                label=f"file モード候補 ({candidate.label}) の未翻訳差分",
+            )
         except Exception:
             continue
 
-        namespace_score = 0 if candidate.namespace_hint and candidate.namespace_hint == source.namespace else 1
-        label_score = 0 if source.namespace and source.namespace in candidate.label else 1
-        score = (namespace_score, label_score, candidate.label)
-        matches.append((score, cleaned_map, warnings, candidate))
+        merged_map = dict(preserved_target_data)
+        merged_map.update(cleaned_partial_map)
+        score = (1, namespace_score, label_score, candidate.label)
+        matches.append((score, merged_map, warnings, candidate))
 
     if not matches:
         raise RuntimeError(
@@ -1945,17 +2114,23 @@ def select_translation_candidate_for_source(
     return sorted(matches, key=lambda item: item[0])[0][1:]
 
 
-def choose_translation_sources_for_pack(mod_root: Path, config: dict[str, Any]) -> tuple[list[LangSource], list[LangSource]]:
+def choose_translation_sources_for_pack(
+    mod_root: Path,
+    config: dict[str, Any],
+) -> tuple[list[TranslationSourcePlan], list[LangSource], list[LangSource]]:
     translation = get_section(config, "translation")
     target_locale = cfg_str(translation, "target_locale", "ja_jp")
     source_priority = cfg_str_list(translation, "source_locale_priority", DEFAULT_SOURCE_LOCALE_PRIORITY)
+    repair = cfg_bool(translation, "repair_broken_placeholders", True)
+    skip_completed_target = cfg_bool(translation, "cancel_if_target_locale_exists", True)
 
     sources = discover_lang_sources(mod_root)
     if not sources:
         raise RuntimeError("翻訳元に使える lang ファイルが見つかりませんでした。")
 
-    selected: list[LangSource] = []
+    selected: list[TranslationSourcePlan] = []
     skipped_target_only: list[LangSource] = []
+    skipped_completed_target: list[LangSource] = []
     for namespace, namespace_sources in sorted(group_lang_sources_by_namespace(sources).items()):
         best = choose_best_lang_source(namespace_sources, namespace, source_priority, target_locale)
         if best is None:
@@ -1963,33 +2138,54 @@ def choose_translation_sources_for_pack(mod_root: Path, config: dict[str, Any]) 
         if best.locale == target_locale:
             skipped_target_only.append(best)
             continue
-        selected.append(best)
+        existing_target = find_lang_source_for_locale(namespace_sources, target_locale, namespace)
+        plan = build_translation_source_plan(best, existing_target if skip_completed_target else None, repair)
+        if skip_completed_target and plan.existing_target_source and not plan.pending_source_data:
+            skipped_completed_target.append(plan.existing_target_source)
+            continue
+        selected.append(plan)
 
     if selected:
-        return selected, skipped_target_only
+        return selected, skipped_target_only, skipped_completed_target
 
     if skipped_target_only:
         raise RuntimeError(
             f"翻訳元に使える lang ファイルが見つかりませんでした。{target_locale}.json 以外の source locale がありません。"
         )
+    if skipped_completed_target:
+        raise RuntimeError(
+            f"翻訳する必要のあるキーが見つかりませんでした。{target_locale}.json は既に十分に埋まっています。"
+        )
     raise RuntimeError("翻訳元に使える lang ファイルが見つかりませんでした。")
 
 
 def build_translated_entries_from_candidates(
-    sources: list[LangSource],
+    plans: list[TranslationSourcePlan],
     candidates: list[TranslationCandidate],
     config: dict[str, Any],
 ) -> list[TranslatedLangEntry]:
     translation = get_section(config, "translation")
     repair = cfg_bool(translation, "repair_broken_placeholders", True)
+    target_locale = cfg_str(translation, "target_locale", "ja_jp")
     translated_entries: list[TranslatedLangEntry] = []
-    for source in sources:
+    for plan in plans:
+        source = plan.source
         print(f"[SOURCE] 照合元 lang ファイル: {source.path}")
-        source_map = load_lang_source_dict(source)
+        if plan.existing_target_source and plan.reused_source_key_count:
+            print(
+                f"[SOURCE] 既存の {target_locale}.json を再利用: namespace={source.namespace} keep={plan.reused_source_key_count} translate={len(plan.pending_source_data)}"
+            )
         try:
-            translated_map, warnings, candidate = select_translation_candidate_for_source(candidates, source_map, source, repair)
+            translated_map, warnings, candidate = select_translation_candidate_for_source(
+                candidates,
+                plan.source_data,
+                source,
+                repair,
+                pending_source_map=plan.pending_source_data if plan.existing_target_source else None,
+                preserved_target_data=plan.preserved_target_data if plan.existing_target_source else None,
+            )
         except RuntimeError as e:
-            if len(sources) > 1:
+            if len(plans) > 1:
                 raise RuntimeError(
                     f"{e} 複数 namespace の mod なので、抽出結果の bundle JSON か、namespace ごとの辞書を含む翻訳データを用意してください。"
                 ) from e
@@ -2003,7 +2199,12 @@ def build_translated_entries_from_candidates(
 
 def validate_clipboard_translation_entries(mod_root: Path, config: dict[str, Any], clipboard_text: str) -> list[TranslatedLangEntry]:
     candidates = load_translation_candidates_or_raise(clipboard_text, "クリップボード")
-    sources, skipped = choose_translation_sources_for_pack(mod_root, config)
+    sources, skipped_target_only, skipped_completed = choose_translation_sources_for_pack(mod_root, config)
+    if skipped_completed:
+        target_locale = cfg_str(get_section(config, "translation"), "target_locale", "ja_jp")
+        for source in skipped_completed:
+            print(f"[INFO] {source.namespace} は既存の {target_locale}.json が十分に埋まっているため翻訳対象から外します: {source.path}")
+    skipped = skipped_target_only
     if skipped:
         for source in skipped:
             print(f"[INFO] {source.namespace} は既に {source.locale}.json しか無いため翻訳対象から外します: {source.path}")
@@ -2014,7 +2215,12 @@ def load_file_mode_translation_entries(mod_root: Path, config: dict[str, Any]) -
     candidates = load_translation_candidates_from_sources(config)
     if not candidates:
         raise RuntimeError("file モードの翻訳データが指定されていません。翻訳ファイルか直接入力テキストを設定してください。")
-    sources, skipped = choose_translation_sources_for_pack(mod_root, config)
+    sources, skipped_target_only, skipped_completed = choose_translation_sources_for_pack(mod_root, config)
+    if skipped_completed:
+        target_locale = cfg_str(get_section(config, "translation"), "target_locale", "ja_jp")
+        for source in skipped_completed:
+            print(f"[INFO] {source.namespace} は既存の {target_locale}.json が十分に埋まっているため翻訳対象から外します: {source.path}")
+    skipped = skipped_target_only
     if skipped:
         for source in skipped:
             print(f"[INFO] {source.namespace} は既に {source.locale}.json しか無いため翻訳対象から外します: {source.path}")
@@ -2033,7 +2239,7 @@ def maybe_auto_fetch_source_lang_for_clipboard(
 
     translation = get_section(config, "translation")
     locale_priority = cfg_str_list(translation, "source_locale_priority", DEFAULT_SOURCE_LOCALE_PRIORITY)
-    result = extract_lang_json_result(mod_root, None, locale_priority)
+    result = extract_lang_json_result(mod_root, None, locale_priority, config)
     method = set_clipboard_text(result.json_text)
     raise ClipboardSourceAutoFetched(str(reason), result, method)
 
@@ -2412,6 +2618,7 @@ def translate_lang_dict_with_ai(
     source_locale: str,
     config: dict[str, Any],
     mod_info: ModInfo,
+    translation_memory_seed: dict[str, str] | None = None,
 ) -> dict[str, str]:
     translation = get_section(config, "translation")
     chunk_size = cfg_int(translation, "chunk_size", 120)
@@ -2426,7 +2633,7 @@ def translate_lang_dict_with_ai(
         chunks.append(part)
 
     merged: dict[str, str] = {}
-    translation_memory: dict[str, str] = {}
+    translation_memory: dict[str, str] = dict(translation_memory_seed or {})
     total = len(chunks)
     for idx, chunk in enumerate(chunks, start=1):
         print(f"[AI] 翻訳中 {idx}/{total} ...")
@@ -2610,18 +2817,41 @@ def build_translated_entries(mod_root: Path, mod_info: ModInfo, config: dict[str
         return load_file_mode_translation_entries(mod_root, config)
 
     if mode == "ai":
-        sources, skipped = choose_translation_sources_for_pack(mod_root, config)
-        if skipped:
-            for source in skipped:
+        sources, skipped_target_only, skipped_completed = choose_translation_sources_for_pack(mod_root, config)
+        translation = get_section(config, "translation")
+        target_locale = cfg_str(translation, "target_locale", "ja_jp")
+        if skipped_completed:
+            for source in skipped_completed:
+                print(f"[INFO] {source.namespace} は既存の {target_locale}.json が十分に埋まっているため翻訳対象から外します: {source.path}")
+        if skipped_target_only:
+            for source in skipped_target_only:
                 print(f"[INFO] {source.namespace} は既に {source.locale}.json しか無いため翻訳対象から外します: {source.path}")
         translated_entries: list[TranslatedLangEntry] = []
         total = len(sources)
-        for index, source in enumerate(sources, start=1):
+        for index, plan in enumerate(sources, start=1):
+            source = plan.source
             prefix = f"[AI {index}/{total}]" if total > 1 else "[AI]"
             print(f"{prefix} 元 lang ファイル: {source.path}")
-            source_map = load_lang_source_dict(source)
-            translated = translate_lang_dict_with_ai(source_map, source.locale, config, mod_info)
-            translated_entries.append(TranslatedLangEntry(source=source, data=translated))
+            if plan.existing_target_source and plan.reused_source_key_count:
+                print(
+                    f"{prefix} 既存の {target_locale}.json を再利用: namespace={source.namespace} keep={plan.reused_source_key_count} translate={len(plan.pending_source_data)}"
+                )
+            pending_source_map = plan.pending_source_data
+            translation_memory_seed = build_translation_memory_seed(
+                plan.source_data,
+                pending_source_map,
+                plan.preserved_target_data,
+            )
+            translated = translate_lang_dict_with_ai(
+                pending_source_map,
+                source.locale,
+                config,
+                mod_info,
+                translation_memory_seed=translation_memory_seed,
+            )
+            merged = dict(plan.preserved_target_data)
+            merged.update(translated)
+            translated_entries.append(TranslatedLangEntry(source=source, data=merged))
         return translated_entries
 
     raise RuntimeError(f"未対応の translation.mode です: {mode}")
@@ -2819,7 +3049,7 @@ def run_extract_mode(ctx: RuntimeContext, cli_input_path: str | None, args: argp
             locale_priority = normalize_locale_priority(args.extract_locale)
             preferred_namespace = choose_namespace_for_extraction(mod_root, args.extract_namespace.strip() or None)
             maybe_cancel_if_target_locale_exists(mod_root, preferred_namespace, ctx.config, "元 lang 抽出")
-            result = extract_lang_json_result(mod_root, preferred_namespace, locale_priority)
+            result = extract_lang_json_result(mod_root, preferred_namespace, locale_priority, ctx.config)
         finally:
             if temp_dir is not None:
                 temp_dir.cleanup()

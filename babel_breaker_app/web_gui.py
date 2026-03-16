@@ -68,7 +68,7 @@ SECTION_DESCRIPTIONS = {
 }
 
 FIELD_HELP = {
-    ("translation", "cancel_if_target_locale_exists"): "mod に目的 locale が既に含まれていたら、抽出や生成を安全に中止します。",
+    ("translation", "cancel_if_target_locale_exists"): "目的 locale が十分に入っている namespace は外し、一部未翻訳なら既存訳を残したまま不足分だけ補完します。",
     ("translation", "custom_prompt"): "作品用語、口調、公式訳優先ルールなどを自由に書けます。",
     ("translation", "source_locale_priority"): "カンマ区切りで入力します。例: en_us, en_gb",
     ("file_mode", "translation_files_text"): "1 行 1 ファイル。JSON / TXT を混在できます。1 ファイルに複数 mod 分の辞書が入っていても探索します。",
