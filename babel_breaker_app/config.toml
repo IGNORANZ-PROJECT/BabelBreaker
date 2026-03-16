@@ -76,9 +76,11 @@ mode = "clipboard"
 # target_locale = "de_de" -> de_de.json
 target_locale = "ja_jp"
 
-# mod 側に target_locale の lang が既に入っていた場合は、
-# 抽出や生成をそこで止める安全装置です。
-# すでに公式翻訳や同梱翻訳がある mod を二重に処理しないためのものです。
+# mod 側に target_locale の lang が既に入っていた場合の安全装置です。
+# true のとき:
+# - すでに十分に翻訳されている namespace は抽出や生成の対象から外します
+# - 一部だけ未翻訳なら、既存訳を残しつつ不足分だけ補完します
+# - mod 全体で補完する必要が無ければ、抽出や生成を中止します
 cancel_if_target_locale_exists = true
 
 # AI に説明するための人間向けの言語名です。

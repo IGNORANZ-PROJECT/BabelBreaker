@@ -225,6 +225,7 @@ GUI でできること:
 - 複数 namespace / 複数 source lang を持つ mod でも、選ばれた source をまとめて翻訳します
 - 既に `target_locale` がある場合でも、一部未翻訳なら既存訳を残したまま不足分だけ翻訳します
 - `target_locale` が十分に埋まっている namespace は、既定で安全にスキップします
+- `target_locale` しか無い namespace でも、AI モードではその既存 lang を source fallback として補完翻訳できます
 
 重要な設定:
 

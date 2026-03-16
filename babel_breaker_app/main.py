@@ -204,6 +204,7 @@ target_locale = "ja_jp"
 # - すでに十分に翻訳されている namespace は抽出や生成の対象から外します
 # - 一部だけ未翻訳なら、既存訳を残しつつ不足分だけ補完します
 # - mod 全体で補完する必要が無ければ、抽出や生成を中止します
+# - ただし target_locale しか無い namespace は、その既存 lang を source fallback として使えます
 cancel_if_target_locale_exists = true
 
 # AI に説明するための人間向けの言語名です。
@@ -593,6 +594,7 @@ class TranslationSourcePlan:
     existing_target_source: LangSource | None = None
     preserved_target_data: dict[str, str] = field(default_factory=dict)
     reused_source_key_count: int = 0
+    source_is_target_locale_fallback: bool = False
 
 
 class ClipboardSourceAutoFetched(Exception):
@@ -1845,7 +1847,7 @@ def maybe_cancel_if_target_locale_exists(
         if best is None:
             return
         if best.locale == target_locale:
-            continue
+            return
 
         plan = build_translation_source_plan(best, existing_target, repair)
         if plan.pending_source_data:
@@ -2136,7 +2138,15 @@ def choose_translation_sources_for_pack(
         if best is None:
             continue
         if best.locale == target_locale:
-            skipped_target_only.append(best)
+            source_data = load_lang_source_dict(best)
+            selected.append(
+                TranslationSourcePlan(
+                    source=best,
+                    source_data=source_data,
+                    pending_source_data=dict(source_data),
+                    source_is_target_locale_fallback=True,
+                )
+            )
             continue
         existing_target = find_lang_source_for_locale(namespace_sources, target_locale, namespace)
         plan = build_translation_source_plan(best, existing_target if skip_completed_target else None, repair)
@@ -2148,10 +2158,6 @@ def choose_translation_sources_for_pack(
     if selected:
         return selected, skipped_target_only, skipped_completed_target
 
-    if skipped_target_only:
-        raise RuntimeError(
-            f"翻訳元に使える lang ファイルが見つかりませんでした。{target_locale}.json 以外の source locale がありません。"
-        )
     if skipped_completed_target:
         raise RuntimeError(
             f"翻訳する必要のあるキーが見つかりませんでした。{target_locale}.json は既に十分に埋まっています。"
@@ -2171,6 +2177,10 @@ def build_translated_entries_from_candidates(
     for plan in plans:
         source = plan.source
         print(f"[SOURCE] 照合元 lang ファイル: {source.path}")
+        if plan.source_is_target_locale_fallback:
+            print(
+                f"[SOURCE] {source.namespace} は {source.locale}.json しか無いため、この既存 lang を source として使います。"
+            )
         if plan.existing_target_source and plan.reused_source_key_count:
             print(
                 f"[SOURCE] 既存の {target_locale}.json を再利用: namespace={source.namespace} keep={plan.reused_source_key_count} translate={len(plan.pending_source_data)}"
@@ -2823,15 +2833,16 @@ def build_translated_entries(mod_root: Path, mod_info: ModInfo, config: dict[str
         if skipped_completed:
             for source in skipped_completed:
                 print(f"[INFO] {source.namespace} は既存の {target_locale}.json が十分に埋まっているため翻訳対象から外します: {source.path}")
-        if skipped_target_only:
-            for source in skipped_target_only:
-                print(f"[INFO] {source.namespace} は既に {source.locale}.json しか無いため翻訳対象から外します: {source.path}")
         translated_entries: list[TranslatedLangEntry] = []
         total = len(sources)
         for index, plan in enumerate(sources, start=1):
             source = plan.source
             prefix = f"[AI {index}/{total}]" if total > 1 else "[AI]"
             print(f"{prefix} 元 lang ファイル: {source.path}")
+            if plan.source_is_target_locale_fallback:
+                print(
+                    f"{prefix} {source.namespace} は {source.locale}.json しか無いため、この既存 lang を source として補完翻訳します。"
+                )
             if plan.existing_target_source and plan.reused_source_key_count:
                 print(
                     f"{prefix} 既存の {target_locale}.json を再利用: namespace={source.namespace} keep={plan.reused_source_key_count} translate={len(plan.pending_source_data)}"
@@ -2844,7 +2855,11 @@ def build_translated_entries(mod_root: Path, mod_info: ModInfo, config: dict[str
             )
             translated = translate_lang_dict_with_ai(
                 pending_source_map,
-                source.locale,
+                (
+                    f"{source.locale} (existing target-locale file; keep already natural target-language lines unchanged and translate only unfinished or foreign-language lines)"
+                    if plan.source_is_target_locale_fallback
+                    else source.locale
+                ),
                 config,
                 mod_info,
                 translation_memory_seed=translation_memory_seed,
