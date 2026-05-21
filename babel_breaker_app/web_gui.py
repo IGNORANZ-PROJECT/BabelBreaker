@@ -13,12 +13,13 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 try:
     from .gui_shared import API_STYLE_OPTIONS, FIELD_SPECS, TRANSLATION_MODE_OPTIONS
@@ -96,6 +97,9 @@ EXTRACT_FIELD_SPECS = [
     ("extract_no_clipboard", "クリップボードへ入れず、ファイルだけ保存する", "bool"),
 ]
 
+SESSION_STALE_SECONDS = 120.0
+SESSION_CLOSE_GRACE_SECONDS = 3.0
+
 
 class MemoryWriter:
     def __init__(self, app: "WebGUIApp", stream_name: str) -> None:
@@ -137,6 +141,10 @@ class WebGUIApp:
             "extract_namespace": "",
             "extract_no_clipboard": False,
         }
+        self.browser_sessions: dict[str, float] = {}
+        self.auto_shutdown_armed = False
+        self.no_session_since: float | None = None
+        self.shutdown_requested = False
         if not self.config_path.exists():
             self.append_log(
                 "[INFO] babel_breaker_app/config.toml はまだありません。GUI で設定を調整して「設定を保存」か「リソースパック生成」を押すと作成されます。\n",
@@ -177,6 +185,67 @@ class WebGUIApp:
                     "failures": self.progress_failures,
                 },
             }
+
+    def touch_browser_session(self, session_id: str) -> None:
+        normalized = session_id.strip()
+        if not normalized:
+            return
+        now = time.monotonic()
+        with self.lock:
+            self.browser_sessions[normalized] = now
+            self.auto_shutdown_armed = True
+            self.no_session_since = None
+
+    def close_browser_session(self, session_id: str) -> None:
+        normalized = session_id.strip()
+        if not normalized:
+            return
+        now = time.monotonic()
+        with self.lock:
+            self.browser_sessions.pop(normalized, None)
+            if self.auto_shutdown_armed and not self.browser_sessions:
+                self.no_session_since = now
+
+    def prune_stale_browser_sessions(self) -> None:
+        now = time.monotonic()
+        with self.lock:
+            stale_ids = [
+                session_id
+                for session_id, last_seen in self.browser_sessions.items()
+                if now - last_seen >= SESSION_STALE_SECONDS
+            ]
+            for session_id in stale_ids:
+                self.browser_sessions.pop(session_id, None)
+            if self.auto_shutdown_armed and not self.browser_sessions:
+                if self.no_session_since is None:
+                    self.no_session_since = now
+            else:
+                self.no_session_since = None
+
+    def monitor_browser_sessions(self) -> None:
+        while True:
+            time.sleep(1.0)
+            self.prune_stale_browser_sessions()
+            should_shutdown = False
+            with self.lock:
+                server_active = self.server is not None
+                if (
+                    server_active
+                    and self.auto_shutdown_armed
+                    and not self.shutdown_requested
+                    and self.no_session_since is not None
+                    and (time.monotonic() - self.no_session_since) >= SESSION_CLOSE_GRACE_SECONDS
+                ):
+                    self.shutdown_requested = True
+                    self.status = "タブが閉じられたため GUI を終了します"
+                    self.log_revision += 1
+                    should_shutdown = True
+            if not server_active:
+                return
+            if should_shutdown:
+                self.append_log("[INFO] ブラウザのタブが閉じられたため、ローカル GUI を終了します。\n", "stdout")
+                self.shutdown_server()
+                return
 
     def reset_progress(self, action_name: str) -> None:
         with self.lock:
@@ -524,16 +593,18 @@ class WebGUIApp:
   <link rel="icon" type="image/png" href="/favicon.png">
   <style>
     :root {{
-      --bg: #f6f2ea;
-      --panel: #fffdf8;
-      --ink: #16324f;
-      --muted: #5d6777;
-      --accent: #0d6b5f;
-      --accent-2: #e59d2f;
-      --border: #d7cbb9;
-      --danger: #b23a48;
-      --shadow: 0 18px 42px rgba(22, 50, 79, 0.10);
-      --radius: 20px;
+      --bg: #f3efe8;
+      --panel: rgba(255, 255, 255, 0.92);
+      --ink: #1c2430;
+      --muted: #5f6975;
+      --accent: #165f4b;
+      --accent-soft: #edf6f2;
+      --accent-2: #c98b33;
+      --warm-soft: #fff5e7;
+      --border: #d8d2c7;
+      --danger: #b34747;
+      --shadow: 0 16px 36px rgba(28, 36, 48, 0.08);
+      --radius: 18px;
       --mono: "SFMono-Regular", "Consolas", monospace;
       --sans: "Hiragino Sans", "Yu Gothic UI", "Segoe UI", sans-serif;
     }}
@@ -543,72 +614,80 @@ class WebGUIApp:
       font-family: var(--sans);
       color: var(--ink);
       background:
-        radial-gradient(circle at top right, rgba(229,157,47,0.16), transparent 26%),
-        radial-gradient(circle at top left, rgba(13,107,95,0.10), transparent 24%),
-        linear-gradient(180deg, #efe8da 0%, var(--bg) 24%, #f3efe8 100%);
+        radial-gradient(circle at top right, rgba(201, 139, 51, 0.12), transparent 28%),
+        linear-gradient(180deg, #ece7dd 0%, var(--bg) 20%, #f7f4ee 100%);
     }}
     .shell {{
-      max-width: 1120px;
+      max-width: 940px;
       margin: 0 auto;
-      padding: 28px 18px 56px;
+      padding: 24px 18px 48px;
     }}
     .panel {{
-      background: rgba(255,253,248,0.94);
+      background: var(--panel);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       box-shadow: var(--shadow);
     }}
     .hero {{
-      padding: 26px;
-      margin-bottom: 18px;
+      padding: 24px;
     }}
     h1 {{
-      margin: 0 0 8px;
-      font-size: clamp(2.2rem, 4vw, 3.4rem);
-      line-height: 1;
+      margin: 0 0 6px;
+      font-size: clamp(2rem, 4vw, 3rem);
+      line-height: 1.05;
       letter-spacing: -0.03em;
     }}
     .lead {{
       margin: 0;
       font-size: 1rem;
       color: var(--muted);
-      line-height: 1.75;
-    }}
-    .hero-meta {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      margin-top: 16px;
-    }}
-    .meta-pill {{
-      border: 1px solid rgba(13,107,95,0.14);
-      border-radius: 999px;
-      padding: 8px 12px;
-      font-size: 0.88rem;
-      background: rgba(13,107,95,0.05);
-      color: var(--muted);
+      line-height: 1.7;
     }}
     .topbar {{
       display: flex;
       justify-content: space-between;
-      gap: 12px;
-      align-items: start;
+      gap: 18px;
+      align-items: flex-start;
     }}
-    .hero-actions {{
+    .header-copy {{
+      max-width: 700px;
+    }}
+    .subtle-note {{
+      margin: 10px 0 0;
+      color: var(--accent);
+      font-size: 0.92rem;
+      line-height: 1.6;
+    }}
+    .status-block {{
+      display: grid;
+      gap: 6px;
+      justify-items: end;
+      min-width: 140px;
+    }}
+    .status-label {{
+      font-size: 0.76rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }}
+    .tool-row {{
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
-      margin-top: 18px;
     }}
     button {{
       border: none;
       border-radius: 999px;
-      padding: 11px 16px;
-      font-size: 0.96rem;
+      padding: 11px 15px;
+      font-size: 0.95rem;
       font-weight: 700;
       cursor: pointer;
       background: var(--ink);
       color: #fff;
+      transition: transform 120ms ease, opacity 120ms ease, background 120ms ease, border-color 120ms ease;
+    }}
+    button:hover:not(:disabled) {{
+      transform: translateY(-1px);
     }}
     button.secondary {{
       background: #fff;
@@ -620,7 +699,7 @@ class WebGUIApp:
     }}
     button.warn {{
       background: var(--accent-2);
-      color: #2b1d10;
+      color: #34230d;
     }}
     button.ghost {{
       background: transparent;
@@ -638,39 +717,46 @@ class WebGUIApp:
     .card {{
       padding: 20px;
     }}
-    .quick {{
-      padding: 24px;
-    }}
-    .quick-grid {{
+    .card-head {{
       display: grid;
-      gap: 18px;
+      gap: 6px;
+      margin-bottom: 14px;
+    }}
+    .eyebrow {{
+      font-size: 0.76rem;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-weight: 800;
     }}
     .section-title {{
-      margin: 0 0 8px;
+      margin: 0;
       font-size: 1.18rem;
     }}
     .desc {{
-      margin: 0 0 14px;
+      margin: 0;
       color: var(--muted);
       line-height: 1.7;
     }}
+    .section-grid {{
+      display: grid;
+      gap: 14px;
+    }}
     .dropzone {{
-      border: 2px dashed rgba(13,107,95,0.28);
-      border-radius: 22px;
-      padding: 26px 22px;
-      background:
-        linear-gradient(180deg, rgba(13,107,95,0.06), rgba(255,255,255,0.82));
+      border: 2px dashed rgba(22, 95, 75, 0.24);
+      border-radius: 20px;
+      padding: 28px 22px;
+      background: linear-gradient(180deg, rgba(22, 95, 75, 0.05), rgba(255, 255, 255, 0.84));
       text-align: center;
       transition: border-color 160ms ease, transform 160ms ease, background 160ms ease;
     }}
     .dropzone.dragover {{
       border-color: var(--accent);
       transform: translateY(-1px);
-      background:
-        linear-gradient(180deg, rgba(13,107,95,0.10), rgba(255,255,255,0.88));
+      background: linear-gradient(180deg, rgba(22, 95, 75, 0.1), rgba(255, 255, 255, 0.9));
     }}
     .drop-title {{
-      font-size: clamp(1.2rem, 2vw, 1.6rem);
+      font-size: clamp(1.15rem, 2vw, 1.45rem);
       font-weight: 800;
       letter-spacing: -0.02em;
     }}
@@ -682,15 +768,19 @@ class WebGUIApp:
     .drop-actions {{
       display: flex;
       flex-wrap: wrap;
-      justify-content: center;
+      justify-content: flex-start;
       gap: 10px;
       margin-top: 18px;
     }}
+    .step-stack {{
+      display: grid;
+      gap: 14px;
+    }}
     .selected {{
       padding: 16px 18px;
-      border-radius: 18px;
-      background: rgba(22,50,79,0.05);
-      border: 1px solid rgba(22,50,79,0.08);
+      border-radius: 16px;
+      background: linear-gradient(180deg, rgba(22, 95, 75, 0.06), rgba(255, 255, 255, 0.9));
+      border: 1px solid rgba(22, 95, 75, 0.12);
     }}
     .selected-label {{
       font-size: 0.85rem;
@@ -709,17 +799,65 @@ class WebGUIApp:
       color: var(--muted);
       line-height: 1.7;
     }}
-    .queue-panel {{
-      padding: 16px 18px;
-      border-radius: 18px;
-      background: rgba(22,50,79,0.05);
-      border: 1px solid rgba(22,50,79,0.08);
+    .selected-meta-grid {{
       display: grid;
-      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }}
+    .selected-meta-item {{
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.78);
+      border: 1px solid rgba(28, 36, 48, 0.08);
+    }}
+    .selected-meta-item span {{
+      display: block;
+      font-size: 0.76rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }}
+    .selected-meta-item strong {{
+      display: block;
+      margin-top: 6px;
+      font-size: 0.94rem;
+    }}
+    .input-detail {{
+      border-radius: 16px;
+      border: 1px solid rgba(28, 36, 48, 0.08);
+      background: rgba(255, 255, 255, 0.82);
+      overflow: hidden;
+    }}
+    .summary-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px;
+    }}
+    .summary-item {{
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(28, 36, 48, 0.08);
+      background: rgba(255, 255, 255, 0.84);
+    }}
+    .summary-label {{
+      font-size: 0.76rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }}
+    .summary-value {{
+      margin-top: 6px;
+      font-weight: 700;
+      word-break: break-word;
+    }}
+    .queue-panel {{
+      padding: 0;
     }}
     .queue-panel > summary {{
       list-style: none;
       cursor: pointer;
+      padding: 16px 18px;
     }}
     .queue-panel > summary::-webkit-details-marker {{
       display: none;
@@ -734,6 +872,7 @@ class WebGUIApp:
     .queue-body {{
       display: grid;
       gap: 12px;
+      padding: 0 18px 18px;
     }}
     .queue-count {{
       font-size: 0.92rem;
@@ -749,13 +888,13 @@ class WebGUIApp:
       gap: 12px;
       align-items: center;
       padding: 12px 14px;
-      border-radius: 16px;
-      background: rgba(255,255,255,0.82);
-      border: 1px solid rgba(22,50,79,0.08);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.86);
+      border: 1px solid rgba(28, 36, 48, 0.08);
     }}
     .queue-item.current {{
-      border-color: rgba(13,107,95,0.28);
-      background: rgba(13,107,95,0.08);
+      border-color: rgba(22, 95, 75, 0.24);
+      background: var(--accent-soft);
     }}
     .queue-item-title {{
       font-weight: 800;
@@ -775,10 +914,25 @@ class WebGUIApp:
     .mode-card {{
       display: grid;
       gap: 12px;
-      padding: 18px;
-      border-radius: 18px;
-      background: rgba(229,157,47,0.07);
-      border: 1px solid rgba(229,157,47,0.18);
+      background: var(--warm-soft);
+    }}
+    .mode-help {{
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.78);
+      border: 1px solid rgba(201, 139, 51, 0.18);
+    }}
+    .mode-help-title {{
+      font-size: 0.84rem;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      font-weight: 800;
+    }}
+    .mode-help-text {{
+      margin-top: 6px;
+      color: var(--muted);
+      line-height: 1.7;
     }}
     .mode-buttons {{
       display: flex;
@@ -786,32 +940,31 @@ class WebGUIApp:
       gap: 10px;
     }}
     .mode-button {{
-      background: rgba(255,255,255,0.82);
+      background: rgba(255, 255, 255, 0.84);
       color: var(--ink);
-      border: 1px solid rgba(22,50,79,0.10);
+      border: 1px solid rgba(28, 36, 48, 0.1);
     }}
     .mode-button.active {{
       background: var(--ink);
       color: #fff;
       border-color: transparent;
     }}
-    .quick-meta-row {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-    }}
-    .quick-meta-chip {{
-      border-radius: 999px;
-      padding: 8px 12px;
-      background: rgba(255,255,255,0.82);
-      border: 1px solid rgba(22,50,79,0.08);
-      color: var(--muted);
-      font-size: 0.88rem;
-    }}
     .primary-actions {{
       display: flex;
       flex-wrap: wrap;
       gap: 10px;
+    }}
+    .primary-actions button {{
+      min-width: 168px;
+    }}
+    .run-card {{
+      background: linear-gradient(180deg, rgba(22, 95, 75, 0.05), rgba(255, 255, 255, 0.92));
+    }}
+    .run-note {{
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.6;
     }}
     details.disclosure {{
       overflow: hidden;
@@ -834,6 +987,7 @@ class WebGUIApp:
     .mini-grid {{
       display: grid;
       gap: 14px;
+      align-items: start;
     }}
     .field {{
       display: grid;
@@ -863,6 +1017,9 @@ class WebGUIApp:
       font-size: 0.96rem;
       font-family: inherit;
     }}
+    input[type="checkbox"] {{
+      accent-color: var(--accent);
+    }}
     textarea {{
       min-height: 130px;
       resize: vertical;
@@ -873,8 +1030,8 @@ class WebGUIApp:
       gap: 10px;
       padding: 10px 12px;
       border-radius: 14px;
-      background: rgba(20,33,61,0.04);
-      border: 1px solid rgba(20,33,61,0.06);
+      background: rgba(28, 36, 48, 0.04);
+      border: 1px solid rgba(28, 36, 48, 0.06);
     }}
     .path-row {{
       display: grid;
@@ -906,7 +1063,7 @@ class WebGUIApp:
       gap: 8px;
       border-radius: 999px;
       padding: 8px 12px;
-      background: rgba(13,107,95,0.08);
+      background: rgba(22, 95, 75, 0.1);
       color: var(--accent);
       font-weight: 700;
     }}
@@ -925,8 +1082,8 @@ class WebGUIApp:
       margin-top: 14px;
       padding: 14px 16px;
       border-radius: 16px;
-      background: rgba(13,107,95,0.05);
-      border: 1px solid rgba(13,107,95,0.14);
+      background: rgba(22, 95, 75, 0.05);
+      border: 1px solid rgba(22, 95, 75, 0.14);
       display: grid;
       gap: 8px;
     }}
@@ -949,17 +1106,17 @@ class WebGUIApp:
       height: 12px;
       border-radius: 999px;
       overflow: hidden;
-      background: rgba(22,50,79,0.10);
+      background: rgba(28, 36, 48, 0.1);
     }}
     .progress-fill {{
       height: 100%;
       width: 0%;
       border-radius: inherit;
-      background: linear-gradient(90deg, var(--accent), #28a88d);
+      background: linear-gradient(90deg, var(--accent), #2f8f74);
       transition: width 180ms ease;
     }}
     .progress-wrap.done .progress-fill {{
-      background: linear-gradient(90deg, var(--accent-2), #e8b45c);
+      background: linear-gradient(90deg, var(--accent-2), #e6ae53);
     }}
     .progress-meta {{
       font-size: 0.9rem;
@@ -978,20 +1135,51 @@ class WebGUIApp:
     .footer-link {{
       color: inherit;
       text-decoration: none;
-      border-bottom: 1px solid rgba(22,50,79,0.18);
+      border-bottom: 1px solid rgba(28, 36, 48, 0.18);
       padding-bottom: 1px;
       transition: color 120ms ease, border-color 120ms ease;
     }}
     .footer-link:hover {{
       color: var(--ink);
-      border-bottom-color: rgba(22,50,79,0.42);
+      border-bottom-color: rgba(28, 36, 48, 0.42);
     }}
     @media (max-width: 760px) {{
+      .shell {{
+        padding: 16px 14px 32px;
+      }}
+      .hero {{
+        padding: 18px;
+      }}
+      .card {{
+        padding: 16px;
+      }}
       .topbar {{
         flex-direction: column;
       }}
+      .status-block {{
+        justify-items: start;
+      }}
+      .drop-actions {{
+        justify-content: stretch;
+      }}
+      .path-row {{
+        grid-template-columns: 1fr;
+      }}
       .field.inline {{
         grid-template-columns: 1fr;
+      }}
+      .queue-item {{
+        grid-template-columns: 1fr;
+      }}
+      .selected-meta-grid {{
+        grid-template-columns: 1fr;
+      }}
+      .primary-actions button {{
+        width: 100%;
+      }}
+      .tool-row button,
+      .drop-actions button {{
+        width: 100%;
       }}
     }}
   </style>
@@ -1000,25 +1188,15 @@ class WebGUIApp:
   <div class="shell">
     <section class="panel hero">
       <div class="topbar">
-        <div>
-        <h1>Babel Breaker</h1>
-        <p class="lead">基本は mod の JAR / ZIP をここへ落として、翻訳方法を選んで、実行するだけです。細かい設定は必要になった時だけ開けます。</p>
+        <div class="header-copy">
+          <h1>Babel Breaker</h1>
+          <p class="lead">mod を入れて、翻訳方法を選んで、実行するだけです。</p>
+          <p class="subtle-note">最後のタブを閉じると、このローカル GUI も自動で終了します。</p>
         </div>
-        <div class="status-pill" id="status-pill">準備完了</div>
-      </div>
-      <div class="hero-meta">
-        <span class="meta-pill">元 lang 自動抽出</span>
-        <span class="meta-pill">AI / file / clipboard</span>
-        <span class="meta-pill">設定は折りたたみ</span>
-        <span class="meta-pill">Mac / Windows 対応</span>
-      </div>
-      <div class="hero-actions">
-          <button class="secondary" onclick="runAction('save')">設定を保存</button>
-          <button class="ghost" onclick="runAction('reload')">再読込</button>
-          <button class="ghost" onclick="runAction('reset')">初期値</button>
-          <button class="secondary" onclick="openTarget('config_dir')">設定フォルダを開く</button>
-          <button class="secondary" onclick="openTarget('output_dir')">出力先を開く</button>
-        <button class="ghost" onclick="openTarget('readme')">README</button>
+        <div class="status-block">
+          <div class="status-label">状態</div>
+          <div class="status-pill" id="status-pill">準備完了</div>
+        </div>
       </div>
       <div id="flash" class="flash"></div>
       <div id="progress-wrap" class="progress-wrap" hidden>
@@ -1032,72 +1210,75 @@ class WebGUIApp:
     </section>
 
     <main class="stack">
-      <section class="panel quick">
-        <div class="quick-grid">
-          <div>
-            <h2 class="section-title">1. mod を入れる</h2>
-            <p class="desc">ふだんは JAR / ZIP をここへドラッグ＆ドロップするだけで十分です。フォルダ入力が必要な時だけ下のフォルダ選択を使ってください。</p>
-            <div id="dropzone" class="dropzone">
-              <div id="drop-title" class="drop-title">mod JAR / ZIP をここへドロップ</div>
-              <div id="drop-sub" class="drop-sub">またはファイル選択。フォルダ入力は別ボタンで選べます。</div>
-              <div class="drop-actions">
-                <button class="accent" data-nonblocking="1" type="button" onclick="document.getElementById('upload-input').click()">ファイルを選ぶ</button>
-                <button class="secondary picker-button" data-nonblocking="1" type="button" onclick="pickInputFolder()">フォルダを選ぶ</button>
-                <button class="ghost" data-nonblocking="1" data-queue-only="1" type="button" onclick="runAction('clear_queue')">キューを空にする</button>
-              </div>
-              <input id="upload-input" type="file" accept=".jar,.zip,application/java-archive,application/zip" multiple hidden>
+      <section class="panel card">
+        <div class="card-head">
+          <div class="eyebrow">Step 1</div>
+          <h2 class="section-title">mod を入れる</h2>
+          <p class="desc">最初に入力する mod を選びます。通常は JAR / ZIP をドロップするだけで十分です。</p>
+        </div>
+        <div class="step-stack">
+          <div id="dropzone" class="dropzone">
+            <div id="drop-title" class="drop-title">mod JAR / ZIP をここへドロップ</div>
+            <div id="drop-sub" class="drop-sub">またはファイルを選ぶ。解凍済みフォルダを使う時だけフォルダ選択を使ってください。</div>
+            <div class="drop-actions">
+              <button class="accent" data-nonblocking="1" type="button" onclick="document.getElementById('upload-input').click()">ファイルを選ぶ</button>
+              <button class="secondary picker-button" data-nonblocking="1" type="button" onclick="pickInputFolder()">フォルダを選ぶ</button>
             </div>
+            <input id="upload-input" type="file" accept=".jar,.zip,application/java-archive,application/zip" multiple hidden>
           </div>
-
-          <details id="queue-panel" class="queue-panel" open>
+          <div id="current-input-card" class="selected"></div>
+          <details id="queue-panel" class="input-detail queue-panel">
             <summary class="queue-header">
               <div>
-                <div class="selected-label">処理キュー</div>
-                <div id="queue-count" class="queue-count">0 件</div>
+                <div class="selected-label">入力の詳細</div>
+                <div id="queue-count" class="queue-count">待機なし</div>
               </div>
               <span class="hint">開く / 閉じる</span>
             </summary>
             <div class="queue-body">
-              <div class="button-row">
-                <button class="ghost" data-nonblocking="1" type="button" onclick="runAction('clear_queue')">全削除</button>
-              </div>
               <div id="queue-list" class="queue-list"></div>
+              <div class="tool-row">
+                <button class="ghost" data-nonblocking="1" type="button" onclick="runAction('clear_input')">入力をクリア</button>
+                <button class="ghost" data-nonblocking="1" data-queue-only="1" type="button" onclick="runAction('clear_queue')">キューを空にする</button>
+              </div>
               <input id="selected_input_path" type="hidden">
             </div>
           </details>
-
-          <div class="mode-card">
-            <div>
-              <h2 class="section-title">2. 翻訳方法を選ぶ</h2>
-              <p class="desc">AI に直接翻訳させるか、翻訳済み JSON を使うかを選びます。普段はこれだけ選べば進めます。</p>
-            </div>
-            <div class="mode-buttons">
-              <button id="mode-clipboard" class="mode-button" type="button" onclick="setMode('clipboard')">clipboard</button>
-              <button id="mode-file" class="mode-button" type="button" onclick="setMode('file')">file</button>
-              <button id="mode-ai" class="mode-button" type="button" onclick="setMode('ai')">AI</button>
-            </div>
-            <div class="quick-meta-row">
-              <span class="quick-meta-chip">locale: <strong id="quick-target-locale"></strong></span>
-              <span class="quick-meta-chip">出力先: <strong id="quick-output-dir"></strong></span>
-            </div>
-          </div>
-
-          {self.render_file_mode_inputs()}
-
-          <div>
-            <h2 class="section-title">3. 実行する</h2>
-            <p class="desc">通常は「リソースパック生成」で完了です。元 JSON だけ欲しい時だけ「元 lang を取得」を使います。</p>
-            <div class="primary-actions">
-              <button class="accent" type="button" onclick="runAction('generate')">リソースパック生成</button>
-              <button class="warn" type="button" onclick="runAction('extract')">元 lang を取得</button>
-              <button class="secondary" type="button" onclick="runAction('shutdown')">GUI を終了</button>
-            </div>
-          </div>
         </div>
       </section>
 
+      <section class="panel card mode-card">
+        <div class="card-head">
+          <div class="eyebrow">Step 2</div>
+          <h2 class="section-title">翻訳方法を選ぶ</h2>
+          <p class="desc">次に、翻訳済み JSON を使うか、AI でそのまま翻訳するかを選びます。</p>
+        </div>
+        <div class="mode-buttons">
+          <button id="mode-clipboard" class="mode-button" type="button" onclick="setMode('clipboard')">clipboard</button>
+          <button id="mode-file" class="mode-button" type="button" onclick="setMode('file')">file</button>
+          <button id="mode-ai" class="mode-button" type="button" onclick="setMode('ai')">AI</button>
+        </div>
+        <div class="summary-grid">
+          <div class="summary-item">
+            <div class="summary-label">モード</div>
+            <div class="summary-value" id="quick-mode"></div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-label">locale</div>
+            <div class="summary-value" id="quick-target-locale"></div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-label">出力先</div>
+            <div class="summary-value" id="quick-output-dir"></div>
+          </div>
+        </div>
+        <div id="mode-help" class="mode-help"></div>
+      </section>
+
+      {self.render_file_mode_inputs()}
+
       <details class="panel disclosure">
-        <summary>詳細設定を開く</summary>
+        <summary>必要な場合だけ詳細設定</summary>
         <div class="details-body">
           <div class="mini-grid">
             {self.render_section("general")}
@@ -1112,11 +1293,40 @@ class WebGUIApp:
         </div>
       </details>
 
+      <section class="panel card run-card">
+        <div class="card-head">
+          <div class="eyebrow">Step 3</div>
+          <h2 class="section-title">実行する</h2>
+          <p class="desc">最後に実行します。通常は「リソースパック生成」を押せば完了です。</p>
+        </div>
+        <div class="primary-actions">
+          <button class="accent" type="button" onclick="runAction('generate')">リソースパック生成</button>
+          <button class="warn" type="button" onclick="runAction('extract')">元 lang を取得</button>
+        </div>
+        <div class="run-note">実行すると、画面にある設定内容を保存してから処理します。元 JSON だけ欲しい時だけ「元 lang を取得」を使ってください。</div>
+      </section>
+
+      <details class="panel disclosure">
+        <summary>補助操作</summary>
+        <div class="details-body">
+          <p class="desc">保存、再読込、出力先を開く、GUI を閉じるなどの補助操作です。普段は触らなくて大丈夫です。</p>
+          <div class="tool-row">
+            <button class="secondary" type="button" onclick="runAction('save')">設定を保存</button>
+            <button class="ghost" type="button" onclick="runAction('reload')">再読込</button>
+            <button class="ghost" type="button" onclick="runAction('reset')">初期値</button>
+            <button class="secondary" type="button" onclick="openTarget('output_dir')">出力先を開く</button>
+            <button class="secondary" type="button" onclick="openTarget('config_dir')">設定フォルダを開く</button>
+            <button class="ghost" type="button" onclick="openTarget('readme')">README</button>
+            <button class="ghost" type="button" onclick="runAction('shutdown')">GUI を終了</button>
+          </div>
+        </div>
+      </details>
+
       <details class="panel disclosure">
         <summary>ログを見る</summary>
         <div class="details-body">
           <div id="log" class="log"></div>
-          <div class="hero-actions" style="margin-top: 12px;">
+          <div class="tool-row">
             <button class="secondary" type="button" onclick="runAction('clear_log')">ログを消す</button>
             <button class="secondary" type="button" onclick="copyLog()">ログをコピー</button>
           </div>
@@ -1133,10 +1343,28 @@ class WebGUIApp:
     const initialConfig = {config_json};
     const initialExtract = {extract_json};
     const fieldMeta = {field_meta_json};
+    const sessionId = window.crypto && typeof window.crypto.randomUUID === 'function'
+      ? window.crypto.randomUUID()
+      : `session-${{Date.now()}}-${{Math.random().toString(16).slice(2)}}`;
+    const modeHelpMap = {{
+      clipboard: {{
+        title: 'clipboard モード',
+        text: '翻訳済み JSON を手早く 1 件ずつ戻したい時向けです。入力 mod は 1 件ずつ処理します。'
+      }},
+      file: {{
+        title: 'file モード',
+        text: '翻訳済みファイルや貼り付けテキストを使って、複数 mod をまとめて処理したい時向けです。'
+      }},
+      ai: {{
+        title: 'AI モード',
+        text: '元 lang の抽出から翻訳、リソースパック生成までまとめて進めたい時向けです。'
+      }},
+    }};
     let selectedInputPath = {selected_input_json};
     let queueItems = {queue_json};
     let currentJob = {current_job_json};
     let lastLogRevision = -1;
+    let closeNotified = false;
 
     function fieldId(section, key) {{
       return `${{section}}__${{key}}`;
@@ -1144,6 +1372,10 @@ class WebGUIApp:
 
     function currentMode() {{
       return document.getElementById(fieldId('translation', 'mode')).value || 'clipboard';
+    }}
+
+    function formatModeLabel(mode) {{
+      return mode === 'ai' ? 'AI' : mode;
     }}
 
     function setFlash(message, kind='') {{
@@ -1212,6 +1444,51 @@ class WebGUIApp:
       }}
     }}
 
+    function renderCurrentInput(fallbackPath='') {{
+      const card = document.getElementById('current-input-card');
+      if (!card) return;
+      const fallback = String(fallbackPath || '');
+      const queuedPath = queueItems.length ? String((queueItems[0] && queueItems[0].path) || '') : '';
+      const modeLabel = formatModeLabel(currentMode());
+      const queueLabel = currentJob
+        ? (queueItems.length ? `実行中 + ${{queueItems.length}} 件待機` : '実行中')
+        : (queueItems.length ? `${{queueItems.length}} 件` : 'なし');
+      const activePath = currentJob
+        ? String(currentJob.path || currentJob.label || '')
+        : (queueItems.length ? queuedPath : (selectedInputPath || fallback || queuedPath));
+      const metaHtml = `<div class="selected-meta-grid">
+        <div class="selected-meta-item">
+          <span>モード<\/span>
+          <strong>${{escapeHtml(modeLabel)}}<\/strong>
+        <\/div>
+        <div class="selected-meta-item">
+          <span>キュー<\/span>
+          <strong>${{escapeHtml(queueLabel)}}<\/strong>
+        <\/div>
+      <\/div>`;
+      if (queueItems.length) {{
+        card.innerHTML = `<div class="selected-label">現在の状態<\/div>
+          <div class="selected-path">${{escapeHtml(activePath || 'キュー処理')}}<\/div>
+          <div class="selected-note">次に処理される入力です。AI / file モードではこの下の詳細どおりに上から順に処理します。<\/div>
+          ${{metaHtml}}`;
+        return;
+      }}
+      if (activePath) {{
+        const note = selectedInputPath
+          ? '今この画面で選んだ入力を使います。'
+          : '設定ファイルに保存された入力を使います。';
+        card.innerHTML = `<div class="selected-label">現在の入力<\/div>
+          <div class="selected-path">${{escapeHtml(activePath)}}<\/div>
+          <div class="selected-note">${{note}}<\/div>
+          ${{metaHtml}}`;
+        return;
+      }}
+      card.innerHTML = `<div class="selected-label">現在の入力<\/div>
+        <div class="selected-path">まだ選択されていません<\/div>
+        <div class="selected-note">JAR / ZIP をドロップするか、ファイルまたはフォルダを選んでください。<\/div>
+        ${{metaHtml}}`;
+    }}
+
     function updateQuickSummary() {{
       const mode = currentMode();
       const locale = document.getElementById(fieldId('translation', 'target_locale')).value || 'ja_jp';
@@ -1219,9 +1496,17 @@ class WebGUIApp:
       const fallbackPath = document.getElementById(fieldId('general', 'input_path')).value || '';
       const effectivePath = (queueItems.length > 0 ? '' : (selectedInputPath || fallbackPath));
 
+      document.getElementById('quick-mode').textContent = formatModeLabel(mode);
       document.getElementById('quick-target-locale').textContent = locale;
       document.getElementById('quick-output-dir').textContent = outputDir;
       document.getElementById('selected_input_path').value = selectedInputPath || '';
+      const modeHelp = modeHelpMap[mode] || modeHelpMap.clipboard;
+      const modeHelpEl = document.getElementById('mode-help');
+      if (modeHelpEl) {{
+        modeHelpEl.innerHTML = `<div class="mode-help-title">${{escapeHtml(modeHelp.title)}}<\/div>
+          <div class="mode-help-text">${{escapeHtml(modeHelp.text)}}<\/div>`;
+      }}
+      renderCurrentInput(fallbackPath);
       renderQueue(effectivePath);
 
       document.getElementById('mode-clipboard').classList.toggle('active', mode === 'clipboard');
@@ -1234,13 +1519,11 @@ class WebGUIApp:
       if (mode === 'clipboard' && !selectedInputPath && queueItems.length) {{
         selectedInputPath = queueItems[0].path || '';
       }}
-      const queuePanel = document.getElementById('queue-panel');
       const fileModeCard = document.getElementById('file-mode-card');
       const uploadInput = document.getElementById('upload-input');
       const dropTitle = document.getElementById('drop-title');
       const dropSub = document.getElementById('drop-sub');
       const extractNoClipboard = document.getElementById('extract_no_clipboard');
-      if (queuePanel) queuePanel.hidden = (mode === 'clipboard');
       if (fileModeCard) fileModeCard.hidden = (mode !== 'file');
       if (uploadInput) uploadInput.multiple = mode !== 'clipboard';
       document.querySelectorAll('[data-queue-only="1"]').forEach((el) => {{
@@ -1275,7 +1558,16 @@ class WebGUIApp:
     function renderQueue(fallbackPath='') {{
       const queueList = document.getElementById('queue-list');
       const queueCount = document.getElementById('queue-count');
-      queueCount.textContent = `${{queueItems.length}} 件` + (currentJob ? ` / 実行中: ${{currentJob.label || currentJob.path}}` : '');
+      const mode = currentMode();
+      if (currentJob) {{
+        queueCount.textContent = queueItems.length
+          ? `実行中 / 残り ${{queueItems.length}} 件`
+          : '実行中';
+      }} else if (queueItems.length) {{
+        queueCount.textContent = `${{queueItems.length}} 件待機中`;
+      }} else {{
+        queueCount.textContent = mode === 'clipboard' ? '1 件ずつ処理' : '待機なし';
+      }}
       const currentHtml = currentJob ? `<div class="queue-item current">
         <div>
           <div class="queue-item-title">実行中: ${{escapeHtml(currentJob.label || currentJob.path)}}<\/div>
@@ -1285,8 +1577,8 @@ class WebGUIApp:
       <\/div>` : '';
       if (!queueItems.length) {{
         const fallback = fallbackPath
-          ? `${{currentHtml}}<div class="queue-empty">キューは空です。現在は設定済み入力を使います:<br>${{escapeHtml(fallbackPath)}}</div>`
-          : `${{currentHtml}}<div class="queue-empty">キューは空です。JAR / ZIP をここへ追加すると、上から順に処理されます。</div>`;
+          ? `${{currentHtml}}<div class="queue-empty">現在の入力:<br>${{escapeHtml(fallbackPath)}}</div>`
+          : `${{currentHtml}}<div class="queue-empty">${{mode === 'clipboard' ? 'clipboard モードでは 1 件ずつ処理します。' : 'JAR / ZIP を追加すると、ここに処理順で並びます。'}}</div>`;
         queueList.innerHTML = fallback;
         return;
       }}
@@ -1389,7 +1681,12 @@ class WebGUIApp:
       if (result.config) applyConfig(result.config);
       if (result.extract) applyExtract(result.extract);
       if (result.ui) applyUi(result.ui);
-      const state = await refreshState();
+      let state = null;
+      try {{
+        state = await refreshState();
+      }} catch (error) {{
+        state = null;
+      }}
       showResultFlash(result, state);
       if (action === 'shutdown' && result.ok) {{
         window.setTimeout(() => window.close(), 400);
@@ -1461,8 +1758,24 @@ class WebGUIApp:
       setFlash(result.message || '', result.ok ? 'ok' : 'error');
     }}
 
+    function notifySessionClosed() {{
+      if (closeNotified) return;
+      closeNotified = true;
+      const payload = JSON.stringify({{ session_id: sessionId }});
+      if (navigator.sendBeacon) {{
+        navigator.sendBeacon('/api/session-close', new Blob([payload], {{ type: 'application/json' }}));
+        return;
+      }}
+      fetch('/api/session-close', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: payload,
+        keepalive: true,
+      }}).catch(() => {{}});
+    }}
+
     async function refreshState() {{
-      const response = await fetch('/api/state');
+      const response = await fetch(`/api/state?session_id=${{encodeURIComponent(sessionId)}}`);
       const state = await response.json();
       document.getElementById('status-pill').textContent = state.status;
       queueItems = state.queue_items || [];
@@ -1506,6 +1819,9 @@ class WebGUIApp:
       event.target.value = '';
     }});
 
+    window.addEventListener('pagehide', notifySessionClosed);
+    window.addEventListener('beforeunload', notifySessionClosed);
+
     const dropzone = document.getElementById('dropzone');
     ['dragenter', 'dragover'].forEach((eventName) => {{
       dropzone.addEventListener(eventName, (event) => {{
@@ -1532,8 +1848,10 @@ class WebGUIApp:
     applyConfig(initialConfig);
     applyExtract(initialExtract);
     applyUi({{ selected_input_path: selectedInputPath }});
-    refreshState();
-    setInterval(refreshState, 1000);
+    refreshState().catch(() => {{}});
+    setInterval(() => {{
+      refreshState().catch(() => {{}});
+    }}, 1000);
   </script>
 </body>
 </html>
@@ -1593,16 +1911,18 @@ class WebGUIApp:
             )
 
         return (
-            f'<article class="panel card"><h2>{html.escape(title)}</h2>'
-            f'<p class="desc">{html.escape(description)}</p>'
+            f'<article class="panel card"><div class="card-head"><div class="eyebrow">Detail</div>'
+            f'<h2 class="section-title">{html.escape(title)}</h2>'
+            f'<p class="desc">{html.escape(description)}</p></div>'
             f'<div class="section-grid">{"".join(fields_html)}</div></article>'
         )
 
     def render_extract_options(self) -> str:
         return (
             '<article class="panel card">'
-            '<h2>抽出オプション</h2>'
-            '<p class="desc">元 lang を取得する時だけ必要です。普段は何も触らなくて大丈夫です。file モードでは常に JSON ファイル保存のみを行い、クリップボードには入れません。</p>'
+            '<div class="card-head"><div class="eyebrow">Detail</div>'
+            '<h2 class="section-title">抽出オプション</h2>'
+            '<p class="desc">元 lang を取得する時だけ必要です。普段は何も触らなくて大丈夫です。file モードでは常に JSON ファイル保存のみを行い、クリップボードには入れません。</p></div>'
             '<div class="section-grid">'
             '<div class="field"><label for="extract_output">保存先ファイル</label>'
             '<div class="path-row"><input id="extract_output" type="text">'
@@ -1617,8 +1937,9 @@ class WebGUIApp:
     def render_file_mode_inputs(self) -> str:
         return (
             '<article id="file-mode-card" class="panel card" hidden>'
-            '<h2>file モード入力</h2>'
-            '<p class="desc">翻訳済み JSON / TXT のファイル一覧か、直接貼り付けテキストを使います。1 ファイルに複数 mod 分の辞書が入っていても自動で探索します。</p>'
+            '<div class="card-head"><div class="eyebrow">File Mode</div>'
+            '<h2 class="section-title">file モード入力</h2>'
+            '<p class="desc">翻訳済み JSON / TXT のファイル一覧か、直接貼り付けテキストを使います。1 ファイルに複数 mod 分の辞書が入っていても自動で探索します。</p></div>'
             '<div class="section-grid">'
             '<div class="field"><label for="file_mode__translation_files_text">翻訳ファイル一覧</label>'
             '<div class="button-row"><button class="secondary picker-button" data-nonblocking="1" type="button" onclick="pickPath(\'translation_files\', \'file_mode__translation_files_text\')">ファイルを追加</button></div>'
@@ -1922,6 +2243,8 @@ class WebGUIApp:
                 return {"ok": True, "message": "元 lang 抽出を開始しました。", "config": self.config_data, "extract": self.extract_state, "ui": {"selected_input_path": self.selected_input_path}}
 
             if action == "shutdown":
+                with self.lock:
+                    self.shutdown_requested = True
                 self.set_status("GUI を終了します")
                 threading.Thread(target=self.shutdown_server, daemon=True).start()
                 return {"ok": True, "message": "GUI を終了します。", "config": self.config_data, "extract": self.extract_state, "ui": {"selected_input_path": self.selected_input_path}}
@@ -1973,6 +2296,8 @@ def launch_web_gui_app(core: Any, script_dir: Path | None = None, config_path: P
                 self.wfile.write(body)
                 return
             if parsed.path == "/api/state":
+                session_id = parse_qs(parsed.query).get("session_id", [""])[0]
+                app.touch_browser_session(session_id)
                 self.send_json(app.get_state())
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
@@ -1997,6 +2322,11 @@ def launch_web_gui_app(core: Any, script_dir: Path | None = None, config_path: P
             if parsed.path == "/api/upload-input":
                 ok, message, path = self.handle_upload_input()
                 self.send_json({"ok": ok, "message": message, "path": path, "ui": {"selected_input_path": path or ""}})
+                return
+            if parsed.path == "/api/session-close":
+                payload = self.read_json()
+                app.close_browser_session(str(payload.get("session_id", "")))
+                self.send_json({"ok": True})
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -2054,7 +2384,9 @@ def launch_web_gui_app(core: Any, script_dir: Path | None = None, config_path: P
             return
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
     app.server = server
+    threading.Thread(target=app.monitor_browser_sessions, daemon=True).start()
     url = f"http://127.0.0.1:{server.server_port}/"
     print(f"[INFO] ブラウザ GUI を起動します。")
     print(f"[INFO] 次の URL を開いてください: {url}")
@@ -2068,5 +2400,6 @@ def launch_web_gui_app(core: Any, script_dir: Path | None = None, config_path: P
     except KeyboardInterrupt:
         print("\n[INFO] GUI を終了します。")
     finally:
+        app.server = None
         server.server_close()
     return 0

@@ -6,6 +6,7 @@ __pycache__/
 
 # Project-generated output
 _babel_breaker_output/
+.babel_breaker_runtime/
 
 # C extensions
 *.so

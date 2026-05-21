@@ -18,12 +18,15 @@ Babel Breaker
    - 必要なら API キーを環境変数に入れる
 
 2. いちばん簡単な実行
+   launch_gui.command / launch_gui.bat
+
+3. Python を手で使う場合
    python3 -m babel_breaker_app
 
-3. jar を直接指定
+4. jar を直接指定
    python3 -m babel_breaker_app "/path/to/mod.jar"
 
-4. 解凍済みフォルダを指定
+5. 解凍済みフォルダを指定
    python3 -m babel_breaker_app "/path/to/unpacked_mod"
 
 ------------------------------------------------------------
@@ -63,19 +66,19 @@ Minecraft の lang JSON は
 必要なもの
 ------------------------------------------------------------
 
-- Python 3.10 以上推奨
+- Mac / Windows なら同梱ランチャーで Python 不要
 - babel_breaker_app/config.toml
 - 入力 mod（jar のままでも、解凍済みでも可）
 
 AI モードで追加:
 - API キー
 
-あると便利:
+Python を手で使う場合にあると便利:
 - Pillow
 - tomli（Python 3.10系で tomllib が無い場合）
 
 例:
-  pip install pillow tomli
+  pip install pillow
 """
 
 from __future__ import annotations
@@ -138,13 +141,17 @@ CONFIG_TEMPLATE = r'''# ========================================================
 # 2. 必要なら API キーを環境変数に入れる
 # 3. 必要なら babel_breaker_app/assets/icon.png を差し替える
 #    （無くても動きますが、pack.png は付きません）
-# 4. project ルートで python3 -m babel_breaker_app を実行する
+# 4. `launch_gui.command` / `launch_gui.bat` を実行する
+#    （Python を手で使うなら `python3 -m babel_breaker_app` でも可）
 #
 # ------------------------------------------------------------
 # 実行方法
 # ------------------------------------------------------------
 #
 # いちばん簡単:
+#   launch_gui.command / launch_gui.bat
+#
+# Python を手で使う場合:
 #   python3 -m babel_breaker_app
 #
 # jar を直接指定:
@@ -418,7 +425,8 @@ anthropic_version = "2023-06-01"
 # 使い方:
 # 0. 必要なら `python3 -m babel_breaker_app --extract-lang ...` で元 lang JSON を取り出す
 # 1. 翻訳済み JSON 本文をコピー
-# 2. python3 -m babel_breaker_app
+# 2. `launch_gui.command` / `launch_gui.bat` を実行
+#    （Python を手で使うなら `python3 -m babel_breaker_app`）
 #
 # JSON の形式はこうです:
 # {

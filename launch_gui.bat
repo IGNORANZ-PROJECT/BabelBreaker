@@ -2,27 +2,13 @@
 setlocal
 cd /d "%~dp0"
 
-where py >nul 2>nul
-if %errorlevel%==0 (
-    py -m babel_breaker_app --gui
-    set STATUS=%errorlevel%
-) else (
-    where python >nul 2>nul
-    if %errorlevel%==0 (
-        python -m babel_breaker_app --gui
-        set STATUS=%errorlevel%
-    ) else (
-        echo Python 3 was not found.
-        echo Install Python and try again.
-        pause
-        exit /b 1
-    )
-)
-
-if not "%STATUS%"=="0" (
-    echo.
-    echo Babel Breaker GUI failed to start.
+where powershell >nul 2>nul
+if %errorlevel% neq 0 (
+    echo PowerShell was not found.
+    echo Windows PowerShell 5.1 or later is required for the first launch.
     pause
+    exit /b 1
 )
 
-exit /b %STATUS%
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0launch_gui.ps1"
+exit /b %errorlevel%
