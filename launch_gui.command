@@ -13,8 +13,10 @@ UV_PYTHON_INSTALL_DIR="$RUNTIME_DIR/python"
 VENV_DIR="$SCRIPT_DIR/.venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
 REQUIREMENTS_FILE="$SCRIPT_DIR/requirements-launcher.txt"
+LOG_DIR="$RUNTIME_DIR/logs"
+LOG_FILE="$LOG_DIR/gui.log"
 
-mkdir -p "$RUNTIME_DIR" "$UV_HOME" "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR"
+mkdir -p "$RUNTIME_DIR" "$UV_HOME" "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR" "$LOG_DIR"
 
 pause_and_exit() {
   local message="$1"
@@ -55,6 +57,21 @@ create_or_repair_venv() {
   "$UV_BIN" "${args[@]}"
 }
 
+start_gui_detached() {
+  : > "$LOG_FILE"
+  nohup "$VENV_PYTHON" -m babel_breaker_app.main --gui >>"$LOG_FILE" 2>&1 < /dev/null &
+  GUI_PID=$!
+
+  sleep 2
+
+  if kill -0 "$GUI_PID" >/dev/null 2>&1; then
+    disown "$GUI_PID" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  return 1
+}
+
 export UV_CACHE_DIR
 export UV_PYTHON_INSTALL_DIR
 export UV_PYTHON_NO_REGISTRY=1
@@ -75,11 +92,15 @@ if ! "$UV_BIN" pip install --python "$VENV_DIR" -r "$REQUIREMENTS_FILE"; then
   pause_and_exit "Failed to install the launcher dependencies."
 fi
 
-"$VENV_PYTHON" -m babel_breaker_app --gui
-STATUS=$?
-
-if [ "$STATUS" -ne 0 ]; then
-  pause_and_exit "Babel Breaker GUI failed to start." "$STATUS"
+if ! start_gui_detached; then
+  echo
+  echo "Babel Breaker GUI failed to stay running."
+  if [ -f "$LOG_FILE" ]; then
+    echo
+    tail -n 40 "$LOG_FILE"
+  fi
+  read -r -p "Press Enter to close..."
+  exit 1
 fi
 
 exit 0

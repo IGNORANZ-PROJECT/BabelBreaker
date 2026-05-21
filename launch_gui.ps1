@@ -10,9 +10,13 @@ $cacheDir = Join-Path $runtimeDir "cache"
 $pythonInstallDir = Join-Path $runtimeDir "python"
 $venvDir = Join-Path $scriptDir ".venv"
 $venvPython = Join-Path $venvDir "Scripts\python.exe"
+$venvPythonw = Join-Path $venvDir "Scripts\pythonw.exe"
 $requirementsFile = Join-Path $scriptDir "requirements-launcher.txt"
+$logsDir = Join-Path $runtimeDir "logs"
+$stdoutLog = Join-Path $logsDir "gui.stdout.log"
+$stderrLog = Join-Path $logsDir "gui.stderr.log"
 
-New-Item -ItemType Directory -Force -Path $runtimeDir, $uvHome, $cacheDir, $pythonInstallDir | Out-Null
+New-Item -ItemType Directory -Force -Path $runtimeDir, $uvHome, $cacheDir, $pythonInstallDir, $logsDir | Out-Null
 
 $env:UV_CACHE_DIR = $cacheDir
 $env:UV_PYTHON_INSTALL_DIR = $pythonInstallDir
@@ -40,6 +44,20 @@ function Invoke-Native {
     if ($LASTEXITCODE -ne 0) {
         throw "Command failed ($LASTEXITCODE): $FilePath $($Arguments -join ' ')"
     }
+}
+
+function Get-RecentGuiLog {
+    $lines = @()
+
+    if (Test-Path $stderrLog) {
+        $lines += Get-Content $stderrLog -Tail 40 -ErrorAction SilentlyContinue
+    }
+
+    if ($lines.Count -eq 0 -and (Test-Path $stdoutLog)) {
+        $lines += Get-Content $stdoutLog -Tail 40 -ErrorAction SilentlyContinue
+    }
+
+    return ($lines -join [Environment]::NewLine).Trim()
 }
 
 function Ensure-Uv {
@@ -75,6 +93,41 @@ function Ensure-Venv {
     Invoke-Native -FilePath $uvExe -Arguments $args
 }
 
+function Start-GuiDetached {
+    if (Test-Path $stdoutLog) {
+        Remove-Item $stdoutLog -Force
+    }
+
+    if (Test-Path $stderrLog) {
+        Remove-Item $stderrLog -Force
+    }
+
+    $pythonLauncher = $venvPython
+    if (Test-Path $venvPythonw) {
+        $pythonLauncher = $venvPythonw
+    }
+
+    $process = Start-Process `
+        -FilePath $pythonLauncher `
+        -ArgumentList @("-m", "babel_breaker_app.main", "--gui") `
+        -WorkingDirectory $scriptDir `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $stdoutLog `
+        -RedirectStandardError $stderrLog `
+        -PassThru
+
+    Start-Sleep -Seconds 2
+    $process.Refresh()
+
+    if ($process.HasExited) {
+        $recentLog = Get-RecentGuiLog
+        if ($recentLog) {
+            throw "Babel Breaker GUI failed to stay running.`n`n$recentLog"
+        }
+        throw "Babel Breaker GUI failed to stay running."
+    }
+}
+
 try {
     Ensure-Uv
     Ensure-Venv
@@ -82,12 +135,7 @@ try {
     Write-Host "Installing or refreshing launcher dependencies..."
     Invoke-Native -FilePath $uvExe -Arguments @("pip", "install", "--python", $venvDir, "-r", $requirementsFile)
 
-    & $venvPython -m babel_breaker_app --gui
-    $status = $LASTEXITCODE
-    if ($status -ne 0) {
-        Pause-AndExit -Message "Babel Breaker GUI failed to start." -Code $status
-    }
-
+    Start-GuiDetached
     exit 0
 }
 catch {
