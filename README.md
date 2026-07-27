@@ -14,7 +14,7 @@ Babel Breaker は、値だけを翻訳してキーは維持します。
 - mod の `.jar` / `.zip` / 解凍済みフォルダをそのまま読める
 - 元 `lang` を自動で取り出せる
 - 翻訳済み JSON からリソースパック ZIP を作れる
-- AI を使って翻訳から ZIP 作成まで一気に進められる
+- クラウド AI またはローカル AI を使って翻訳から ZIP 作成まで一気に進められる
 - 複数 namespace / 複数 source lang の mod に対応
 - GUI と CUI の両方で使える
 
@@ -74,13 +74,32 @@ Babel Breaker は、値だけを翻訳してキーは維持します。
 - 直接貼り付けたテキストも使える
 - `AI` と同じくキュー処理に向いている
 
-### `AI`
+### `クラウド AI`
 
 抽出から翻訳、ZIP 作成まで一気に進めたい時向けです。
 
 - `[api]` の設定が必要
 - API キーは環境変数で渡すのがおすすめ
 - `translation.custom_prompt` で用語ルールを追加できる
+
+### `ローカル AI`
+
+翻訳内容を外部クラウドへ送らず、この PC 上だけで処理したい時向けです。
+
+- Ollama のネイティブ API に対応
+- LM Studio などの OpenAI 互換 Chat Completions に対応
+- API キーは不要
+- 安全のため `localhost` / `127.0.0.1` / `::1` 以外には接続しない
+- GUI の `接続を確認` で、生成前にローカル AI の起動状態を確認できる
+
+Ollama の最小例:
+
+```bash
+ollama pull qwen3:8b
+ollama serve
+```
+
+その後、GUI で `ローカル AI` → `Ollama` を選び、モデル名を `qwen3:8b` にします。
 
 ## いちばん簡単な使い分け
 
@@ -103,12 +122,20 @@ Babel Breaker は、値だけを翻訳してキーは維持します。
 JSON 以外は返さないでください。
 ```
 
-### API を使う
+### クラウド API を使う
 
 1. `babel_breaker_app/config.toml` の `[api]` を設定する
 2. GUI で mod を入れる
-3. `AI` を選ぶ
-4. `リソースパック生成` を押す
+3. `クラウド AI` を選ぶ
+4. `翻訳して ZIP を作成` を押す
+
+### この PC の AI を使う
+
+1. Ollama または LM Studio のローカルサーバーを起動する
+2. GUI で mod を入れる
+3. `ローカル AI` と使用アプリを選ぶ
+4. モデル名を入力して `接続を確認` を押す
+5. `翻訳して ZIP を作成` を押す
 
 ## 設定ファイル
 
@@ -132,6 +159,11 @@ custom_prompt = ""
 [file_mode]
 translation_files_text = ""
 inline_translation_text = ""
+
+[local_ai]
+style = "ollama_chat"
+model = "qwen3:8b"
+url = ""
 ```
 
 `config.toml` が無い場合:

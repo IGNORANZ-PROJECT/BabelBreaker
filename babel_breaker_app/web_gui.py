@@ -22,9 +22,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 try:
-    from .gui_shared import API_STYLE_OPTIONS, FIELD_SPECS, TRANSLATION_MODE_OPTIONS
+    from .gui_shared import API_STYLE_OPTIONS, FIELD_SPECS, LOCAL_AI_STYLE_OPTIONS
 except ImportError:
-    from gui_shared import API_STYLE_OPTIONS, FIELD_SPECS, TRANSLATION_MODE_OPTIONS
+    from gui_shared import API_STYLE_OPTIONS, FIELD_SPECS, LOCAL_AI_STYLE_OPTIONS
 
 X_URL = "https://x.com/IGNORANZ_P"
 GITHUB_URL = "https://github.com/IGNORANZ-PROJECT/BabelBreaker"
@@ -50,6 +50,7 @@ SECTION_TITLES = {
     "general": "基本",
     "translation": "翻訳",
     "file_mode": "file モード",
+    "local_ai": "ローカル AI",
     "pack": "パック",
     "api": "API",
     "clipboard": "clipboard",
@@ -59,10 +60,11 @@ SECTION_TITLES = {
 
 SECTION_DESCRIPTIONS = {
     "general": "入力 mod と出力先の設定です。パスは直接貼り付けるか、右側の選択ボタンを使えます。",
-    "translation": "AI / file / clipboard モードの切り替え、locale、用語統一、カスタム指示を設定します。",
+    "translation": "翻訳先と、AI に共通する用語統一やカスタム指示を設定します。",
     "file_mode": "file モードの時だけ使う翻訳データ入力です。複数ファイルと直接貼り付けを併用できます。",
+    "local_ai": "この PC 上で動く Ollama / LM Studio などへ接続します。翻訳内容は外部クラウドへ送信されません。",
     "pack": "生成するリソースパックの名前、説明、アイコン、保持方式を設定します。",
-    "api": "AI モード専用です。通常は API キー環境変数と model を設定します。",
+    "api": "クラウド AI モード専用です。通常は API キー環境変数と model を設定します。",
     "clipboard": "clipboard モード補助設定です。翻訳元 JSON の自動取得を制御します。",
     "input_scan": "input/ 自動探索の設定です。普段使いでは空のままでも問題ありません。",
     "minecraft": "Minecraft バージョンの固定が必要な時だけ使います。",
@@ -74,6 +76,8 @@ FIELD_HELP = {
     ("translation", "source_locale_priority"): "カンマ区切りで入力します。例: en_us, en_gb",
     ("file_mode", "translation_files_text"): "1 行 1 ファイル。JSON / TXT を混在できます。1 ファイルに複数 mod 分の辞書が入っていても探索します。",
     ("file_mode", "inline_translation_text"): "翻訳済み JSON をそのまま貼り付けるか、複数の JSON ブロックをまとめて貼り付けられます。",
+    ("local_ai", "model"): "ローカル AI 側ですでに利用できるモデル名を入力します。",
+    ("local_ai", "url"): "空なら選んだアプリの標準 URL を使います。接続できるのはこの PC 内だけです。",
     ("api", "api_key_direct"): "必要な場合だけ使ってください。通常は環境変数推奨です。",
 }
 
@@ -935,19 +939,101 @@ class WebGUIApp:
       line-height: 1.7;
     }}
     .mode-buttons {{
-      display: flex;
-      flex-wrap: wrap;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 10px;
     }}
     .mode-button {{
+      display: grid;
+      gap: 5px;
+      min-height: 76px;
+      padding: 14px 16px;
+      border-radius: 15px;
+      text-align: left;
       background: rgba(255, 255, 255, 0.84);
       color: var(--ink);
       border: 1px solid rgba(28, 36, 48, 0.1);
     }}
     .mode-button.active {{
-      background: var(--ink);
+      background: var(--accent);
       color: #fff;
       border-color: transparent;
+    }}
+    .mode-button-title {{
+      font-size: 1rem;
+      font-weight: 800;
+    }}
+    .mode-button-caption {{
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 500;
+      line-height: 1.45;
+    }}
+    .mode-button.active .mode-button-caption {{
+      color: rgba(255, 255, 255, 0.78);
+    }}
+    .quick-settings {{
+      display: grid;
+      grid-template-columns: minmax(140px, 0.7fr) minmax(220px, 1.3fr);
+      gap: 10px;
+      padding: 14px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid rgba(201, 139, 51, 0.18);
+    }}
+    .local-ai-card {{
+      background: linear-gradient(180deg, rgba(22, 95, 75, 0.07), rgba(255, 255, 255, 0.92));
+    }}
+    .local-presets {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }}
+    .local-preset {{
+      border-radius: 14px;
+      background: #fff;
+      color: var(--ink);
+      border: 1px solid var(--border);
+    }}
+    .local-preset.active {{
+      color: var(--accent);
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }}
+    .connection-row {{
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }}
+    .connection-result {{
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }}
+    .privacy-note {{
+      margin: 0;
+      padding: 12px 14px;
+      border-radius: 13px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 0.9rem;
+      line-height: 1.6;
+    }}
+    .inline-disclosure {{
+      border: 1px solid rgba(28, 36, 48, 0.08);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.56);
+    }}
+    .inline-disclosure > summary {{
+      padding: 12px 14px;
+      cursor: pointer;
+      font-weight: 700;
+    }}
+    .inline-disclosure-body {{
+      display: grid;
+      gap: 12px;
+      padding: 0 14px 14px;
     }}
     .primary-actions {{
       display: flex;
@@ -1174,6 +1260,11 @@ class WebGUIApp:
       .selected-meta-grid {{
         grid-template-columns: 1fr;
       }}
+      .mode-buttons,
+      .quick-settings,
+      .local-presets {{
+        grid-template-columns: 1fr;
+      }}
       .primary-actions button {{
         width: 100%;
       }}
@@ -1209,7 +1300,8 @@ class WebGUIApp:
       </div>
     </section>
 
-    <main class="stack">
+    <main>
+    <form id="app-form" class="stack" onsubmit="return false;">
       <section class="panel card">
         <div class="card-head">
           <div class="eyebrow">Step 1</div>
@@ -1251,31 +1343,52 @@ class WebGUIApp:
         <div class="card-head">
           <div class="eyebrow">Step 2</div>
           <h2 class="section-title">翻訳方法を選ぶ</h2>
-          <p class="desc">次に、翻訳済み JSON を使うか、AI でそのまま翻訳するかを選びます。</p>
+          <p class="desc">手元の翻訳を使うか、クラウドまたはこの PC の AI で翻訳するかを選びます。</p>
         </div>
+        <input id="translation__mode" type="hidden">
         <div class="mode-buttons">
-          <button id="mode-clipboard" class="mode-button" type="button" onclick="setMode('clipboard')">clipboard</button>
-          <button id="mode-file" class="mode-button" type="button" onclick="setMode('file')">file</button>
-          <button id="mode-ai" class="mode-button" type="button" onclick="setMode('ai')">AI</button>
+          <button id="mode-clipboard" class="mode-button" type="button" onclick="setMode('clipboard')">
+            <span class="mode-button-title">クリップボード</span>
+            <span class="mode-button-caption">翻訳済み JSON を1件ずつ使う</span>
+          </button>
+          <button id="mode-file" class="mode-button" type="button" onclick="setMode('file')">
+            <span class="mode-button-title">翻訳ファイル</span>
+            <span class="mode-button-caption">複数の翻訳済みファイルを使う</span>
+          </button>
+          <button id="mode-ai" class="mode-button" type="button" onclick="setMode('ai')">
+            <span class="mode-button-title">クラウド AI</span>
+            <span class="mode-button-caption">API を使って自動翻訳する</span>
+          </button>
+          <button id="mode-local-ai" class="mode-button" type="button" onclick="setMode('local_ai')">
+            <span class="mode-button-title">ローカル AI</span>
+            <span class="mode-button-caption">この PC の AI で自動翻訳する</span>
+          </button>
         </div>
-        <div class="summary-grid">
-          <div class="summary-item">
-            <div class="summary-label">モード</div>
-            <div class="summary-value" id="quick-mode"></div>
+        <div class="quick-settings">
+          <div class="field">
+            <label for="translation__target_locale">出力 locale</label>
+            <input id="translation__target_locale" type="text" list="locale-presets" placeholder="ja_jp">
           </div>
-          <div class="summary-item">
-            <div class="summary-label">locale</div>
-            <div class="summary-value" id="quick-target-locale"></div>
-          </div>
-          <div class="summary-item">
-            <div class="summary-label">出力先</div>
-            <div class="summary-value" id="quick-output-dir"></div>
+          <div class="field">
+            <label for="translation__target_language_name">翻訳先の言語</label>
+            <input id="translation__target_language_name" type="text" placeholder="Japanese (日本語)">
           </div>
         </div>
+        <datalist id="locale-presets">
+          <option value="ja_jp"></option>
+          <option value="en_us"></option>
+          <option value="zh_cn"></option>
+          <option value="zh_tw"></option>
+          <option value="ko_kr"></option>
+          <option value="de_de"></option>
+          <option value="fr_fr"></option>
+          <option value="es_es"></option>
+        </datalist>
         <div id="mode-help" class="mode-help"></div>
       </section>
 
       {self.render_file_mode_inputs()}
+      {self.render_local_ai_inputs()}
 
       <details class="panel disclosure">
         <summary>必要な場合だけ詳細設定</summary>
@@ -1297,13 +1410,13 @@ class WebGUIApp:
         <div class="card-head">
           <div class="eyebrow">Step 3</div>
           <h2 class="section-title">実行する</h2>
-          <p class="desc">最後に実行します。通常は「リソースパック生成」を押せば完了です。</p>
+          <p class="desc">選んだ翻訳方法で処理し、そのまま使える ZIP を作ります。</p>
         </div>
         <div class="primary-actions">
-          <button class="accent" type="button" onclick="runAction('generate')">リソースパック生成</button>
-          <button class="warn" type="button" onclick="runAction('extract')">元 lang を取得</button>
+          <button id="generate-button" class="accent" type="button" onclick="runAction('generate')">ZIP を作成</button>
+          <button class="secondary" type="button" onclick="runAction('extract')">元の lang JSON を取り出す</button>
         </div>
-        <div class="run-note">実行すると、画面にある設定内容を保存してから処理します。元 JSON だけ欲しい時だけ「元 lang を取得」を使ってください。</div>
+        <div class="run-note">実行時に画面の設定を自動保存します。元データだけ欲しい時は右のボタンを使ってください。</div>
       </section>
 
       <details class="panel disclosure">
@@ -1332,6 +1445,7 @@ class WebGUIApp:
           </div>
         </div>
       </details>
+    </form>
     </main>
     <div class="footer-note">
       <a class="footer-link" href="{html.escape(X_URL)}" target="_blank" rel="noopener noreferrer">© IGNORANZ PROJECT</a>
@@ -1348,16 +1462,20 @@ class WebGUIApp:
       : `session-${{Date.now()}}-${{Math.random().toString(16).slice(2)}}`;
     const modeHelpMap = {{
       clipboard: {{
-        title: 'clipboard モード',
-        text: '翻訳済み JSON を手早く 1 件ずつ戻したい時向けです。入力 mod は 1 件ずつ処理します。'
+        title: 'クリップボード',
+        text: '翻訳済み JSON をコピー済みの時に使います。入力 mod は 1 件ずつ処理します。'
       }},
       file: {{
-        title: 'file モード',
+        title: '翻訳ファイル',
         text: '翻訳済みファイルや貼り付けテキストを使って、複数 mod をまとめて処理したい時向けです。'
       }},
       ai: {{
-        title: 'AI モード',
-        text: '元 lang の抽出から翻訳、リソースパック生成までまとめて進めたい時向けです。'
+        title: 'クラウド AI',
+        text: 'API を使い、元 lang の抽出から翻訳、ZIP 作成までまとめて進めます。'
+      }},
+      local_ai: {{
+        title: 'ローカル AI',
+        text: 'Ollama / LM Studio など、この PC 上の AI だけを使って翻訳します。API キーは不要です。'
       }},
     }};
     let selectedInputPath = {selected_input_json};
@@ -1375,7 +1493,13 @@ class WebGUIApp:
     }}
 
     function formatModeLabel(mode) {{
-      return mode === 'ai' ? 'AI' : mode;
+      const labels = {{
+        clipboard: 'クリップボード',
+        file: '翻訳ファイル',
+        ai: 'クラウド AI',
+        local_ai: 'ローカル AI',
+      }};
+      return labels[mode] || mode;
     }}
 
     function setFlash(message, kind='') {{
@@ -1458,18 +1582,18 @@ class WebGUIApp:
         : (queueItems.length ? queuedPath : (selectedInputPath || fallback || queuedPath));
       const metaHtml = `<div class="selected-meta-grid">
         <div class="selected-meta-item">
-          <span>モード<\/span>
-          <strong>${{escapeHtml(modeLabel)}}<\/strong>
-        <\/div>
+          <span>モード<\\/span>
+          <strong>${{escapeHtml(modeLabel)}}<\\/strong>
+        <\\/div>
         <div class="selected-meta-item">
-          <span>キュー<\/span>
-          <strong>${{escapeHtml(queueLabel)}}<\/strong>
-        <\/div>
-      <\/div>`;
+          <span>キュー<\\/span>
+          <strong>${{escapeHtml(queueLabel)}}<\\/strong>
+        <\\/div>
+      <\\/div>`;
       if (queueItems.length) {{
-        card.innerHTML = `<div class="selected-label">現在の状態<\/div>
-          <div class="selected-path">${{escapeHtml(activePath || 'キュー処理')}}<\/div>
-          <div class="selected-note">次に処理される入力です。AI / file モードではこの下の詳細どおりに上から順に処理します。<\/div>
+        card.innerHTML = `<div class="selected-label">現在の状態<\\/div>
+          <div class="selected-path">${{escapeHtml(activePath || 'キュー処理')}}<\\/div>
+          <div class="selected-note">次に処理される入力です。複数件ある場合は上から順に処理します。<\\/div>
           ${{metaHtml}}`;
         return;
       }}
@@ -1477,34 +1601,29 @@ class WebGUIApp:
         const note = selectedInputPath
           ? '今この画面で選んだ入力を使います。'
           : '設定ファイルに保存された入力を使います。';
-        card.innerHTML = `<div class="selected-label">現在の入力<\/div>
-          <div class="selected-path">${{escapeHtml(activePath)}}<\/div>
-          <div class="selected-note">${{note}}<\/div>
+        card.innerHTML = `<div class="selected-label">現在の入力<\\/div>
+          <div class="selected-path">${{escapeHtml(activePath)}}<\\/div>
+          <div class="selected-note">${{note}}<\\/div>
           ${{metaHtml}}`;
         return;
       }}
-      card.innerHTML = `<div class="selected-label">現在の入力<\/div>
-        <div class="selected-path">まだ選択されていません<\/div>
-        <div class="selected-note">JAR / ZIP をドロップするか、ファイルまたはフォルダを選んでください。<\/div>
+      card.innerHTML = `<div class="selected-label">現在の入力<\\/div>
+        <div class="selected-path">まだ選択されていません<\\/div>
+        <div class="selected-note">JAR / ZIP をドロップするか、ファイルまたはフォルダを選んでください。<\\/div>
         ${{metaHtml}}`;
     }}
 
     function updateQuickSummary() {{
       const mode = currentMode();
-      const locale = document.getElementById(fieldId('translation', 'target_locale')).value || 'ja_jp';
-      const outputDir = document.getElementById(fieldId('general', 'output_dir')).value || '_babel_breaker_output';
       const fallbackPath = document.getElementById(fieldId('general', 'input_path')).value || '';
       const effectivePath = (queueItems.length > 0 ? '' : (selectedInputPath || fallbackPath));
 
-      document.getElementById('quick-mode').textContent = formatModeLabel(mode);
-      document.getElementById('quick-target-locale').textContent = locale;
-      document.getElementById('quick-output-dir').textContent = outputDir;
       document.getElementById('selected_input_path').value = selectedInputPath || '';
       const modeHelp = modeHelpMap[mode] || modeHelpMap.clipboard;
       const modeHelpEl = document.getElementById('mode-help');
       if (modeHelpEl) {{
-        modeHelpEl.innerHTML = `<div class="mode-help-title">${{escapeHtml(modeHelp.title)}}<\/div>
-          <div class="mode-help-text">${{escapeHtml(modeHelp.text)}}<\/div>`;
+        modeHelpEl.innerHTML = `<div class="mode-help-title">${{escapeHtml(modeHelp.title)}}<\\/div>
+          <div class="mode-help-text">${{escapeHtml(modeHelp.text)}}<\\/div>`;
       }}
       renderCurrentInput(fallbackPath);
       renderQueue(effectivePath);
@@ -1512,6 +1631,10 @@ class WebGUIApp:
       document.getElementById('mode-clipboard').classList.toggle('active', mode === 'clipboard');
       document.getElementById('mode-file').classList.toggle('active', mode === 'file');
       document.getElementById('mode-ai').classList.toggle('active', mode === 'ai');
+      document.getElementById('mode-local-ai').classList.toggle('active', mode === 'local_ai');
+      for (const button of document.querySelectorAll('.mode-button')) {{
+        button.setAttribute('aria-pressed', button.classList.contains('active') ? 'true' : 'false');
+      }}
       updateModeVisibility(mode);
     }}
 
@@ -1520,11 +1643,17 @@ class WebGUIApp:
         selectedInputPath = queueItems[0].path || '';
       }}
       const fileModeCard = document.getElementById('file-mode-card');
+      const localAiCard = document.getElementById('local-ai-card');
+      const apiSettingsCard = document.getElementById('api-settings-card');
+      const clipboardSettingsCard = document.getElementById('clipboard-settings-card');
       const uploadInput = document.getElementById('upload-input');
       const dropTitle = document.getElementById('drop-title');
       const dropSub = document.getElementById('drop-sub');
       const extractNoClipboard = document.getElementById('extract_no_clipboard');
       if (fileModeCard) fileModeCard.hidden = (mode !== 'file');
+      if (localAiCard) localAiCard.hidden = (mode !== 'local_ai');
+      if (apiSettingsCard) apiSettingsCard.hidden = (mode !== 'ai');
+      if (clipboardSettingsCard) clipboardSettingsCard.hidden = (mode !== 'clipboard');
       if (uploadInput) uploadInput.multiple = mode !== 'clipboard';
       document.querySelectorAll('[data-queue-only="1"]').forEach((el) => {{
         el.hidden = (mode === 'clipboard');
@@ -1536,9 +1665,16 @@ class WebGUIApp:
       }}
       if (dropSub) {{
         dropSub.textContent = mode === 'clipboard'
-          ? 'clipboard モードでは 1 件ずつ処理します。フォルダも 1 件ずつ選んでください。'
+          ? 'クリップボードでは 1 件ずつ処理します。フォルダも 1 件ずつ選んでください。'
           : 'またはファイル選択。フォルダ入力は別ボタンで選べます。';
       }}
+      const generateButton = document.getElementById('generate-button');
+      if (generateButton) {{
+        generateButton.textContent = (mode === 'ai' || mode === 'local_ai')
+          ? '翻訳して ZIP を作成'
+          : 'ZIP を作成';
+      }}
+      updateLocalPresetState();
       if (extractNoClipboard) {{
         if (mode === 'file') {{
           if (!extractNoClipboard.disabled) {{
@@ -1570,11 +1706,11 @@ class WebGUIApp:
       }}
       const currentHtml = currentJob ? `<div class="queue-item current">
         <div>
-          <div class="queue-item-title">実行中: ${{escapeHtml(currentJob.label || currentJob.path)}}<\/div>
-          <div class="queue-item-meta">${{escapeHtml(currentJob.path || '')}}<\/div>
-        <\/div>
-        <span class="status-pill">処理中<\/span>
-      <\/div>` : '';
+          <div class="queue-item-title">実行中: ${{escapeHtml(currentJob.label || currentJob.path)}}<\\/div>
+          <div class="queue-item-meta">${{escapeHtml(currentJob.path || '')}}<\\/div>
+        <\\/div>
+        <span class="status-pill">処理中<\\/span>
+      <\\/div>` : '';
       if (!queueItems.length) {{
         const fallback = fallbackPath
           ? `${{currentHtml}}<div class="queue-empty">現在の入力:<br>${{escapeHtml(fallbackPath)}}</div>`
@@ -1586,10 +1722,10 @@ class WebGUIApp:
         return `<div class="queue-item">
           <div>
             <div class="queue-item-title">${{escapeHtml(item.label || item.path)}}</div>
-            <div class="queue-item-meta">${{escapeHtml(item.path)}}<\/div>
-          <\/div>
-          <button class="ghost" data-nonblocking="1" type="button" onclick="removeQueueItem('${{item.id}}')">削除<\/button>
-        <\/div>`;
+            <div class="queue-item-meta">${{escapeHtml(item.path)}}<\\/div>
+          <\\/div>
+          <button class="ghost" data-nonblocking="1" type="button" onclick="removeQueueItem('${{item.id}}')">削除<\\/button>
+        <\\/div>`;
       }}).join('');
     }}
 
@@ -1634,6 +1770,29 @@ class WebGUIApp:
     function setMode(mode) {{
       document.getElementById(fieldId('translation', 'mode')).value = mode;
       updateQuickSummary();
+    }}
+
+    function updateLocalPresetState() {{
+      const style = document.getElementById(fieldId('local_ai', 'style')).value || 'ollama_chat';
+      const ollamaButton = document.getElementById('local-preset-ollama');
+      const openaiButton = document.getElementById('local-preset-openai');
+      ollamaButton.classList.toggle('active', style === 'ollama_chat');
+      openaiButton.classList.toggle('active', style === 'openai_compatible_chat');
+      ollamaButton.setAttribute('aria-pressed', style === 'ollama_chat' ? 'true' : 'false');
+      openaiButton.setAttribute('aria-pressed', style === 'openai_compatible_chat' ? 'true' : 'false');
+    }}
+
+    function setLocalPreset(style) {{
+      document.getElementById(fieldId('local_ai', 'style')).value = style;
+      document.getElementById(fieldId('local_ai', 'url')).value = '';
+      const modelInput = document.getElementById(fieldId('local_ai', 'model'));
+      if (style === 'ollama_chat' && !modelInput.value.trim()) {{
+        modelInput.value = 'qwen3:8b';
+      }}
+      const connectionResult = document.getElementById('local-connection-result');
+      connectionResult.textContent = 'まだ確認していません';
+      connectionResult.style.color = '';
+      updateLocalPresetState();
     }}
 
     function appendUniqueMultilineValue(element, text) {{
@@ -1688,6 +1847,13 @@ class WebGUIApp:
         state = null;
       }}
       showResultFlash(result, state);
+      if (action === 'test_local_ai') {{
+        const connectionResult = document.getElementById('local-connection-result');
+        if (connectionResult) {{
+          connectionResult.textContent = result.message || (result.ok ? '接続できました' : '接続できませんでした');
+          connectionResult.style.color = result.ok ? 'var(--accent)' : 'var(--danger)';
+        }}
+      }}
       if (action === 'shutdown' && result.ok) {{
         window.setTimeout(() => window.close(), 400);
       }}
@@ -1844,6 +2010,12 @@ class WebGUIApp:
       const el = document.getElementById(id);
       if (el) el.addEventListener('input', updateQuickSummary);
     }}
+    document.getElementById(fieldId('local_ai', 'style')).addEventListener('change', () => {{
+      const connectionResult = document.getElementById('local-connection-result');
+      connectionResult.textContent = 'まだ確認していません';
+      connectionResult.style.color = '';
+      updateLocalPresetState();
+    }});
 
     applyConfig(initialConfig);
     applyExtract(initialExtract);
@@ -1864,6 +2036,8 @@ class WebGUIApp:
         fields_html: list[str] = []
 
         for key, label, field_type in FIELD_SPECS[section]:
+            if section == "translation" and key in ("mode", "target_locale", "target_language_name"):
+                continue
             element_id = f"{section}__{key}"
             hint = FIELD_HELP.get((section, key), "")
             buttons = PATH_PICKERS.get((section, key), [])
@@ -1885,15 +2059,13 @@ class WebGUIApp:
                 continue
 
             control_html = ""
-            if (section, key) == ("translation", "mode"):
-                options = "".join(f'<option value="{html.escape(v)}">{html.escape(v)}</option>' for v in TRANSLATION_MODE_OPTIONS)
-                control_html = f'<select id="{element_id}">{options}</select>'
-            elif (section, key) == ("api", "style"):
+            if (section, key) == ("api", "style"):
                 options = "".join(f'<option value="{html.escape(v)}">{html.escape(v)}</option>' for v in API_STYLE_OPTIONS)
                 control_html = f'<select id="{element_id}">{options}</select>'
             else:
                 input_type = "password" if (section, key) == ("api", "api_key_direct") else "text"
-                control_html = f'<input id="{element_id}" type="{input_type}">'
+                autocomplete = ' autocomplete="off"' if input_type == "password" else ""
+                control_html = f'<input id="{element_id}" type="{input_type}"{autocomplete}>'
 
             if buttons:
                 buttons_html = "".join(
@@ -1911,7 +2083,7 @@ class WebGUIApp:
             )
 
         return (
-            f'<article class="panel card"><div class="card-head"><div class="eyebrow">Detail</div>'
+            f'<article id="{html.escape(section)}-settings-card" class="panel card"><div class="card-head"><div class="eyebrow">Detail</div>'
             f'<h2 class="section-title">{html.escape(title)}</h2>'
             f'<p class="desc">{html.escape(description)}</p></div>'
             f'<div class="section-grid">{"".join(fields_html)}</div></article>'
@@ -1950,6 +2122,48 @@ class WebGUIApp:
             '<textarea id="file_mode__inline_translation_text" placeholder="{&#10;  &quot;mod_a&quot;: {&#10;    &quot;item.example.name&quot;: &quot;例のアイテム&quot;&#10;  }&#10;}"></textarea>'
             '<div class="hint">翻訳済み JSON をそのまま貼るか、複数の JSON ブロックをまとめて貼り付けられます。</div>'
             '</div>'
+            '</div></article>'
+        )
+
+    def render_local_ai_inputs(self) -> str:
+        style_options = []
+        style_labels = {
+            "ollama_chat": "Ollama",
+            "openai_compatible_chat": "LM Studio / OpenAI 互換",
+        }
+        for value in LOCAL_AI_STYLE_OPTIONS:
+            style_options.append(
+                f'<option value="{html.escape(value)}">{html.escape(style_labels.get(value, value))}</option>'
+            )
+        return (
+            '<article id="local-ai-card" class="panel card local-ai-card" hidden>'
+            '<div class="card-head"><div class="eyebrow">Local AI</div>'
+            '<h2 class="section-title">この PC の AI を使う</h2>'
+            '<p class="desc">起動済みの Ollama または LM Studio に接続します。まずアプリを選び、使えるモデル名を入力してください。</p></div>'
+            '<div class="section-grid">'
+            '<div class="local-presets">'
+            '<button id="local-preset-ollama" class="local-preset" type="button" onclick="setLocalPreset(\'ollama_chat\')">Ollama</button>'
+            '<button id="local-preset-openai" class="local-preset" type="button" onclick="setLocalPreset(\'openai_compatible_chat\')">LM Studio / OpenAI 互換</button>'
+            '</div>'
+            '<div class="field"><label for="local_ai__style">接続方式</label>'
+            f'<select id="local_ai__style">{"".join(style_options)}</select></div>'
+            '<div class="field"><label for="local_ai__model">モデル名</label>'
+            '<input id="local_ai__model" type="text" placeholder="例: qwen3:8b">'
+            '<div class="hint">Ollama なら事前に pull 済みの名前、LM Studio ならサーバー画面のモデル ID を使います。</div></div>'
+            '<div class="field"><label for="local_ai__url">接続先 URL</label>'
+            '<input id="local_ai__url" type="text" placeholder="空欄なら標準 URL">'
+            '<div class="hint">Ollama: 127.0.0.1:11434 / LM Studio: 127.0.0.1:1234。空欄のままで通常は動きます。</div></div>'
+            '<div class="connection-row">'
+            '<button class="secondary" data-nonblocking="1" type="button" onclick="runAction(\'test_local_ai\')">接続を確認</button>'
+            '<span id="local-connection-result" class="connection-result">まだ確認していません</span>'
+            '</div>'
+            '<p class="privacy-note">翻訳テキストは、この PC 内の localhost にだけ送られます。外部ホストは指定できません。</p>'
+            '<details class="inline-disclosure"><summary>速度・出力の詳細</summary>'
+            '<div class="inline-disclosure-body">'
+            '<div class="field"><label for="local_ai__timeout">タイムアウト秒</label><input id="local_ai__timeout" type="text"></div>'
+            '<div class="field"><label for="local_ai__temperature">温度</label><input id="local_ai__temperature" type="text"></div>'
+            '<div class="field"><label for="local_ai__max_output_tokens">最大出力トークン</label><input id="local_ai__max_output_tokens" type="text"></div>'
+            '</div></details>'
             '</div></article>'
         )
 
@@ -2213,6 +2427,41 @@ class WebGUIApp:
                     self.log_revision += 1
                 self.set_status("ログを消しました")
                 return {"ok": True, "message": "ログを消しました。", "config": self.config_data, "extract": self.extract_state, "ui": {"selected_input_path": self.selected_input_path}}
+
+            if action == "test_local_ai":
+                config = self.collect_config(payload)
+                try:
+                    models = self.core.check_local_ai_connection(config)
+                except Exception as e:
+                    message = str(e)
+                    self.set_status("ローカル AI に接続できません")
+                    self.append_log(f"[ERROR] {message}\n", "stderr")
+                    return {
+                        "ok": False,
+                        "message": message,
+                        "config": config,
+                        "extract": self.extract_state,
+                        "ui": {"selected_input_path": self.selected_input_path},
+                    }
+                selected_model = str(config.get("local_ai", {}).get("model", "") or "").strip()
+                if models:
+                    preview = "、".join(models[:3])
+                    suffix = f"（利用可能: {preview}{' ほか' if len(models) > 3 else ''}）"
+                    if selected_model and selected_model not in models:
+                        suffix += f" ※「{selected_model}」は一覧にありません"
+                else:
+                    suffix = "（モデル一覧は空です）"
+                message = f"ローカル AI に接続できました {suffix}"
+                self.set_status("ローカル AI 接続 OK")
+                self.append_log(f"[OK] {message}\n", "stdout")
+                return {
+                    "ok": True,
+                    "message": message,
+                    "config": config,
+                    "extract": self.extract_state,
+                    "ui": {"selected_input_path": self.selected_input_path},
+                    "local_models": models,
+                }
 
             if action == "generate":
                 config = self.collect_config(payload)

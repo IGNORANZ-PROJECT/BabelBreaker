@@ -25,6 +25,14 @@ FIELD_SPECS = {
         ("translation_files_text", "翻訳ファイル一覧", "multiline"),
         ("inline_translation_text", "直接入力テキスト", "multiline"),
     ],
+    "local_ai": [
+        ("style", "ローカルAI", "str"),
+        ("model", "モデル名", "str"),
+        ("url", "接続先 URL", "str"),
+        ("timeout", "タイムアウト秒", "int"),
+        ("temperature", "温度", "float"),
+        ("max_output_tokens", "最大出力トークン", "int"),
+    ],
     "pack": [
         ("create_zip", "ZIP を作る", "bool"),
         ("keep_folder", "展開フォルダも残す", "bool"),
@@ -66,4 +74,9 @@ API_STYLE_OPTIONS = [
     "openai_compatible_responses",
 ]
 
-TRANSLATION_MODE_OPTIONS = ["clipboard", "file", "ai"]
+LOCAL_AI_STYLE_OPTIONS = [
+    "ollama_chat",
+    "openai_compatible_chat",
+]
+
+TRANSLATION_MODE_OPTIONS = ["clipboard", "file", "ai", "local_ai"]

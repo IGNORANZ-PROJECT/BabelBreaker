@@ -49,6 +49,12 @@ C. ai モード
    - AI API で「値だけ翻訳」する
    - リソースパックにする
 
+D. local_ai モード
+   - config.toml の translation.mode = "local_ai"
+   - Ollama または OpenAI 互換のローカル AI を使う
+   - 翻訳データを外部クラウドへ送らずに処理する
+   - 元の lang の探索からリソースパック作成まで自動で行う
+
 ------------------------------------------------------------
 超重要
 ------------------------------------------------------------
@@ -73,6 +79,9 @@ Minecraft の lang JSON は
 AI モードで追加:
 - API キー
 
+local_ai モードで追加:
+- 起動済みの Ollama / LM Studio など
+
 Python を手で使う場合にあると便利:
 - Pillow
 - tomli（Python 3.10系で tomllib が無い場合）
@@ -85,18 +94,21 @@ from __future__ import annotations
 
 import argparse
 import copy
+import ipaddress
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 try:
@@ -194,7 +206,8 @@ verbose = false
 # 翻訳モード:
 # "clipboard" = すでに翻訳済み JSON をクリップボードから読む
 # "file"      = 翻訳済み JSON / TXT ファイルや直接入力テキストを使う
-# "ai"        = 元の lang ファイルを見つけて AI で自動翻訳する
+# "ai"        = 元の lang ファイルを見つけてクラウド AI で自動翻訳する
+# "local_ai"  = Ollama / LM Studio など、このPCの AI で自動翻訳する
 mode = "clipboard"
 
 # 出力先 locale です。
@@ -335,6 +348,32 @@ description_template = "{app_name} | {mod_name} {mod_version} -> {target_locale}
 mc_version = ""
 
 
+[local_ai]
+# このPC上で動かす AI の接続設定です。
+#
+# "ollama_chat"
+#   Ollama のネイティブ API。既定 URL は http://127.0.0.1:11434/api/chat
+#
+# "openai_compatible_chat"
+#   LM Studio などの OpenAI 互換 API。
+#   既定 URL は http://127.0.0.1:1234/v1/chat/completions
+style = "ollama_chat"
+
+# 先にローカル AI 側でダウンロードしたモデル名を指定します。
+# Ollama 例: qwen3:8b / gemma3:12b
+# LM Studio 例: サーバー画面に表示されるモデル ID
+model = "qwen3:8b"
+
+# 空なら style ごとの既定 URL を使います。
+# 安全のため localhost / 127.0.0.1 / ::1 のみ接続できます。
+url = ""
+
+# ローカル推論は時間がかかることがあるため、クラウド API より長めです。
+timeout = 600
+temperature = 0.2
+max_output_tokens = 8192
+
+
 [api]
 # 使う API スタイルです。
 # 使える値:
@@ -464,6 +503,8 @@ DEFAULT_ICON_BASENAME = "icon"
 ICON_EXT_PRIORITY = [".png", ".webp", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"]
 ARCHIVE_EXTENSIONS = (".jar", ".zip")
 LANG_FILE_EXTENSIONS = (".json", ".lang")
+MAX_ARCHIVE_ENTRIES = 100_000
+MAX_ARCHIVE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
 DEFAULT_SOURCE_LOCALE_PRIORITY = ["en_us", "en_gb"]
 MOD_METADATA_PATHS = [
     "fabric.mod.json",
@@ -479,6 +520,7 @@ CONFIG_SECTION_ORDER = [
     "file_mode",
     "pack",
     "minecraft",
+    "local_ai",
     "api",
     "clipboard",
     "input_scan",
@@ -509,6 +551,14 @@ CONFIG_KEY_ORDER = {
         "description_template",
     ],
     "minecraft": ["mc_version"],
+    "local_ai": [
+        "style",
+        "model",
+        "url",
+        "timeout",
+        "temperature",
+        "max_output_tokens",
+    ],
     "api": [
         "style",
         "model",
@@ -2310,6 +2360,69 @@ def get_default_api_url(style: str, model: str) -> str:
     return ""
 
 
+def get_default_local_ai_url(style: str) -> str:
+    if style == "ollama_chat":
+        return "http://127.0.0.1:11434/api/chat"
+    if style == "openai_compatible_chat":
+        return "http://127.0.0.1:1234/v1/chat/completions"
+    return ""
+
+
+def validate_local_ai_url(url: str) -> str:
+    normalized = url.strip()
+    parsed = urllib.parse.urlparse(normalized)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise RuntimeError("ローカル AI の接続先は http:// または https:// の URL で指定してください。")
+    if parsed.username or parsed.password:
+        raise RuntimeError("ローカル AI の接続先 URL にユーザー名やパスワードは含められません。")
+
+    hostname = parsed.hostname.rstrip(".").lower()
+    is_loopback = hostname == "localhost"
+    if not is_loopback:
+        try:
+            is_loopback = ipaddress.ip_address(hostname).is_loopback
+        except ValueError:
+            is_loopback = False
+    if not is_loopback:
+        raise RuntimeError(
+            "ローカル AI モードは、この PC の localhost / 127.0.0.1 / ::1 にだけ接続できます。"
+        )
+    return normalized
+
+
+def get_local_ai_settings(config: dict[str, Any]) -> tuple[str, str, str, int, float, int]:
+    local_ai = get_section(config, "local_ai")
+    style = cfg_str(local_ai, "style", "ollama_chat")
+    if style not in ("ollama_chat", "openai_compatible_chat"):
+        raise RuntimeError(f"未対応のローカル AI 形式です: {style}")
+    model = cfg_str(local_ai, "model", "qwen3:8b")
+    if not model:
+        raise RuntimeError("ローカル AI のモデル名を入力してください。")
+    url = cfg_str(local_ai, "url", "") or get_default_local_ai_url(style)
+    url = validate_local_ai_url(url)
+    timeout = cfg_int(local_ai, "timeout", 600)
+    temperature = cfg_float(local_ai, "temperature", 0.2)
+    max_output_tokens = cfg_int(local_ai, "max_output_tokens", 8192)
+    if timeout <= 0:
+        raise RuntimeError("ローカル AI のタイムアウト秒は 1 以上にしてください。")
+    if max_output_tokens <= 0:
+        raise RuntimeError("ローカル AI の最大出力トークンは 1 以上にしてください。")
+    return style, model, url, timeout, temperature, max_output_tokens
+
+
+def get_local_ai_models_url(style: str, request_url: str) -> str:
+    parsed = urllib.parse.urlparse(request_url)
+    if style == "ollama_chat":
+        path = "/api/tags"
+    else:
+        path = parsed.path.rstrip("/")
+        if path.endswith("/chat/completions"):
+            path = path[:-len("/chat/completions")] + "/models"
+        else:
+            path = "/v1/models"
+    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+
+
 def get_api_key(api_section: dict[str, Any]) -> str:
     direct = cfg_str(api_section, "api_key_direct", "")
     if direct:
@@ -2338,6 +2451,44 @@ def http_post_json(url: str, payload: dict[str, Any], headers: dict[str, str], t
         raise RuntimeError(f"AI API HTTP エラー: {e.code} {e.reason}\n{detail}") from e
     except urllib.error.URLError as e:
         raise RuntimeError(f"AI API 接続エラー: {e}") from e
+
+
+def http_get_json(url: str, timeout: int) -> dict[str, Any]:
+    req = urllib.request.Request(url=url, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8")
+            return json.loads(body)
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"ローカル AI HTTP エラー: {e.code} {e.reason}\n{detail}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(
+            "ローカル AI に接続できません。Ollama / LM Studio が起動しているか確認してください。"
+        ) from e
+
+
+def check_local_ai_connection(config: dict[str, Any]) -> list[str]:
+    style, _model, request_url, timeout, _temperature, _max_output_tokens = get_local_ai_settings(config)
+    data = http_get_json(get_local_ai_models_url(style, request_url), min(timeout, 10))
+    models: list[str] = []
+    if style == "ollama_chat":
+        raw_models = data.get("models", [])
+        if isinstance(raw_models, list):
+            for item in raw_models:
+                if isinstance(item, dict):
+                    name = item.get("name") or item.get("model")
+                    if isinstance(name, str) and name.strip():
+                        models.append(name.strip())
+    else:
+        raw_models = data.get("data", [])
+        if isinstance(raw_models, list):
+            for item in raw_models:
+                if isinstance(item, dict):
+                    model_id = item.get("id")
+                    if isinstance(model_id, str) and model_id.strip():
+                        models.append(model_id.strip())
+    return models
 
 
 def extract_text_from_openai_responses(data: dict[str, Any]) -> str:
@@ -2395,6 +2546,16 @@ def extract_text_from_chat_completions(data: dict[str, Any]) -> str:
             return merged
 
     raise RuntimeError("Chat Completions の応答からテキストを抽出できませんでした。")
+
+
+def extract_text_from_ollama_chat(data: dict[str, Any]) -> str:
+    message = data.get("message")
+    if not isinstance(message, dict):
+        raise RuntimeError("Ollama の応答に message がありません。")
+    content = message.get("content")
+    if isinstance(content, str) and content.strip():
+        return content
+    raise RuntimeError("Ollama の応答からテキストを抽出できませんでした。")
 
 
 def extract_text_from_gemini_generate_content(data: dict[str, Any]) -> str:
@@ -2523,12 +2684,17 @@ def call_ai_translate_chunk(
 
     target_language_name = cfg_str(translation, "target_language_name", "Japanese (日本語)")
     custom_prompt = cfg_str(translation, "custom_prompt", "")
-    style = cfg_str(api, "style", "gemini_generate_content")
-    model = cfg_str(api, "model", "gemini-2.5-flash")
-    url = cfg_str(api, "url", "") or get_default_api_url(style, model)
-    timeout = cfg_int(api, "timeout", 180)
-    temperature = cfg_float(api, "temperature", 0.2)
-    max_output_tokens = cfg_int(api, "max_output_tokens", 8192)
+    mode = cfg_str(translation, "mode", "ai").lower()
+    local_mode = mode == "local_ai"
+    if local_mode:
+        style, model, url, timeout, temperature, max_output_tokens = get_local_ai_settings(config)
+    else:
+        style = cfg_str(api, "style", "gemini_generate_content")
+        model = cfg_str(api, "model", "gemini-2.5-flash")
+        url = cfg_str(api, "url", "") or get_default_api_url(style, model)
+        timeout = cfg_int(api, "timeout", 180)
+        temperature = cfg_float(api, "temperature", 0.2)
+        max_output_tokens = cfg_int(api, "max_output_tokens", 8192)
     anthropic_version = cfg_str(api, "anthropic_version", "2023-06-01")
 
     source_locale = "__source__"
@@ -2544,9 +2710,32 @@ def call_ai_translate_chunk(
         consistency_glossary,
         custom_prompt,
     )
-    api_key = get_api_key(api)
 
-    if style == "gemini_generate_content":
+    if style == "ollama_chat":
+        payload = {
+            "model": model,
+            "stream": False,
+            "format": "json",
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_output_tokens,
+            },
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an expert Minecraft mod localization editor. "
+                        "Preserve lore, tone, established franchise terminology, and JSON keys. Return JSON only."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+        }
+        data = http_post_json(url, payload, {"Content-Type": "application/json"}, timeout)
+        text = extract_text_from_ollama_chat(data)
+
+    elif style == "gemini_generate_content":
+        api_key = get_api_key(api)
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
@@ -2583,12 +2772,14 @@ def call_ai_translate_chunk(
         }
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
         }
+        if not local_mode:
+            headers["Authorization"] = f"Bearer {get_api_key(api)}"
         data = http_post_json(url, payload, headers, timeout)
         text = extract_text_from_chat_completions(data)
 
     elif style in ("openai_responses", "openai_compatible_responses"):
+        api_key = get_api_key(api)
         payload = {
             "model": model,
             "input": prompt,
@@ -2601,6 +2792,7 @@ def call_ai_translate_chunk(
         text = extract_text_from_openai_responses(data)
 
     elif style == "anthropic_messages":
+        api_key = get_api_key(api)
         payload = {
             "model": model,
             "max_tokens": max_output_tokens,
@@ -2653,8 +2845,9 @@ def translate_lang_dict_with_ai(
     merged: dict[str, str] = {}
     translation_memory: dict[str, str] = dict(translation_memory_seed or {})
     total = len(chunks)
+    mode_label = "LOCAL AI" if cfg_str(translation, "mode", "ai").lower() == "local_ai" else "AI"
     for idx, chunk in enumerate(chunks, start=1):
-        print(f"[AI] 翻訳中 {idx}/{total} ...")
+        print(f"[{mode_label}] 翻訳中 {idx}/{total} ...")
         consistency_glossary = build_translation_memory_glossary(translation_memory)
         translated_chunk = call_ai_translate_chunk(chunk, config, mod_info, consistency_glossary)
         original_chunk = {k: v for k, v in chunk.items() if k != "__meta_source_locale__"}
@@ -2805,6 +2998,48 @@ def resolve_input_path(ctx: RuntimeContext, cli_input_path: str | None) -> Path:
     )
 
 
+def safe_extract_archive(zf: zipfile.ZipFile, destination: Path) -> None:
+    members = zf.infolist()
+    if len(members) > MAX_ARCHIVE_ENTRIES:
+        raise RuntimeError(f"アーカイブ内のファイル数が多すぎます: {len(members)}")
+    total_size = sum(max(member.file_size, 0) for member in members)
+    if total_size > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+        raise RuntimeError(
+            f"アーカイブ展開後の合計サイズが上限を超えています: {total_size} bytes"
+        )
+
+    root = destination.resolve()
+    for member in members:
+        raw_name = member.filename
+        if not raw_name or raw_name.endswith("/") and raw_name.strip("/") == "":
+            continue
+        if "\\" in raw_name:
+            raise RuntimeError(f"安全でないアーカイブ内パスです: {raw_name}")
+
+        archive_path = PurePosixPath(raw_name)
+        if archive_path.is_absolute() or ".." in archive_path.parts:
+            raise RuntimeError(f"安全でないアーカイブ内パスです: {raw_name}")
+        parts = [part for part in archive_path.parts if part not in ("", ".")]
+        if not parts or ":" in parts[0]:
+            raise RuntimeError(f"安全でないアーカイブ内パスです: {raw_name}")
+
+        unix_mode = (member.external_attr >> 16) & 0xFFFF
+        if stat.S_ISLNK(unix_mode):
+            raise RuntimeError(f"シンボリックリンクを含むアーカイブは展開できません: {raw_name}")
+
+        target = root.joinpath(*parts)
+        resolved_target = target.resolve()
+        if resolved_target != root and root not in resolved_target.parents:
+            raise RuntimeError(f"安全でないアーカイブ内パスです: {raw_name}")
+
+        if member.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(member, "r") as source, target.open("wb") as output:
+            shutil.copyfileobj(source, output)
+
+
 def unpack_if_needed(input_path: Path) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
     if input_path.is_dir():
         return input_path, None
@@ -2812,8 +3047,12 @@ def unpack_if_needed(input_path: Path) -> tuple[Path, tempfile.TemporaryDirector
     if input_path.is_file() and input_path.suffix.lower() in ARCHIVE_EXTENSIONS:
         temp_dir = tempfile.TemporaryDirectory(prefix="babel_breaker_unpacked_")
         unpack_root = Path(temp_dir.name)
-        with zipfile.ZipFile(input_path, "r") as zf:
-            zf.extractall(unpack_root)
+        try:
+            with zipfile.ZipFile(input_path, "r") as zf:
+                safe_extract_archive(zf, unpack_root)
+        except Exception:
+            temp_dir.cleanup()
+            raise
         return unpack_root, temp_dir
 
     raise RuntimeError(f"入力が jar / zip / フォルダ のいずれでもありません: {input_path}")
@@ -2834,7 +3073,7 @@ def build_translated_entries(mod_root: Path, mod_info: ModInfo, config: dict[str
     if mode == "file":
         return load_file_mode_translation_entries(mod_root, config)
 
-    if mode == "ai":
+    if mode in ("ai", "local_ai"):
         sources, skipped_target_only, skipped_completed = choose_translation_sources_for_pack(mod_root, config)
         translation = get_section(config, "translation")
         target_locale = cfg_str(translation, "target_locale", "ja_jp")
@@ -2843,9 +3082,10 @@ def build_translated_entries(mod_root: Path, mod_info: ModInfo, config: dict[str
                 print(f"[INFO] {source.namespace} は既存の {target_locale}.json が十分に埋まっているため翻訳対象から外します: {source.path}")
         translated_entries: list[TranslatedLangEntry] = []
         total = len(sources)
+        log_label = "LOCAL AI" if mode == "local_ai" else "AI"
         for index, plan in enumerate(sources, start=1):
             source = plan.source
-            prefix = f"[AI {index}/{total}]" if total > 1 else "[AI]"
+            prefix = f"[{log_label} {index}/{total}]" if total > 1 else f"[{log_label}]"
             print(f"{prefix} 元 lang ファイル: {source.path}")
             if plan.source_is_target_locale_fallback:
                 print(
@@ -2966,7 +3206,27 @@ def write_pack_files(
     maybe_convert_icon_to_png(icon_src, build_dir / "pack.png")
 
     api = get_section(config, "api")
+    local_ai = get_section(config, "local_ai")
     translation = get_section(config, "translation")
+    translation_mode = cfg_str(translation, "mode", "clipboard").lower()
+    if translation_mode == "local_ai":
+        backend_style = cfg_str(local_ai, "style", "ollama_chat")
+        backend_model = cfg_str(local_ai, "model", "qwen3:8b")
+        backend_url = (
+            cfg_str(local_ai, "url", "")
+            or get_default_local_ai_url(backend_style)
+        )
+        backend_scope = "local"
+    elif translation_mode == "ai":
+        backend_style = cfg_str(api, "style", "")
+        backend_model = cfg_str(api, "model", "")
+        backend_url = cfg_str(api, "url", "") or get_default_api_url(backend_style, backend_model)
+        backend_scope = "cloud"
+    else:
+        backend_style = translation_mode
+        backend_model = ""
+        backend_url = ""
+        backend_scope = "offline"
     source_locales = ", ".join(f"{entry.source.namespace}:{entry.source.locale}" for entry in translated_entries)
 
     info_txt = (
@@ -2981,9 +3241,11 @@ def write_pack_files(
         f"source_locale={translated_entries[0].source.locale if len(translated_entries) == 1 else 'multiple'}\n"
         f"source_locales={source_locales}\n"
         f"source_mod_root={mod_root}\n"
-        f"api_style={cfg_str(api, 'style', '')}\n"
-        f"api_model={cfg_str(api, 'model', '')}\n"
-        f"api_url={cfg_str(api, 'url', '') or get_default_api_url(cfg_str(api, 'style', ''), cfg_str(api, 'model', ''))}\n"
+        f"translation_mode={translation_mode}\n"
+        f"ai_scope={backend_scope}\n"
+        f"ai_style={backend_style}\n"
+        f"ai_model={backend_model}\n"
+        f"ai_url={backend_url}\n"
         f"pack_format={pack_format}\n"
         f"supported_formats={supported_formats}\n"
     )

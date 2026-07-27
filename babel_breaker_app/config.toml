@@ -15,13 +15,17 @@
 # 2. 必要なら API キーを環境変数に入れる
 # 3. 必要なら babel_breaker_app/assets/icon.png を差し替える
 #    （無くても動きますが、pack.png は付きません）
-# 4. project ルートで python3 -m babel_breaker_app を実行する
+# 4. `launch_gui.command` / `launch_gui.bat` を実行する
+#    （Python を手で使うなら `python3 -m babel_breaker_app` でも可）
 #
 # ------------------------------------------------------------
 # 実行方法
 # ------------------------------------------------------------
 #
 # いちばん簡単:
+#   launch_gui.command / launch_gui.bat
+#
+# Python を手で使う場合:
 #   python3 -m babel_breaker_app
 #
 # jar を直接指定:
@@ -64,7 +68,8 @@ verbose = false
 # 翻訳モード:
 # "clipboard" = すでに翻訳済み JSON をクリップボードから読む
 # "file"      = 翻訳済み JSON / TXT ファイルや直接入力テキストを使う
-# "ai"        = 元の lang ファイルを見つけて AI で自動翻訳する
+# "ai"        = 元の lang ファイルを見つけてクラウド AI で自動翻訳する
+# "local_ai"  = Ollama / LM Studio など、このPCの AI で自動翻訳する
 mode = "clipboard"
 
 # 出力先 locale です。
@@ -205,6 +210,32 @@ description_template = "{app_name} | {mod_name} {mod_version} -> {target_locale}
 mc_version = ""
 
 
+[local_ai]
+# このPC上で動かす AI の接続設定です。
+#
+# "ollama_chat"
+#   Ollama のネイティブ API。既定 URL は http://127.0.0.1:11434/api/chat
+#
+# "openai_compatible_chat"
+#   LM Studio などの OpenAI 互換 API。
+#   既定 URL は http://127.0.0.1:1234/v1/chat/completions
+style = "ollama_chat"
+
+# 先にローカル AI 側でダウンロードしたモデル名を指定します。
+# Ollama 例: qwen3:8b / gemma3:12b
+# LM Studio 例: サーバー画面に表示されるモデル ID
+model = "qwen3:8b"
+
+# 空なら style ごとの既定 URL を使います。
+# 安全のため localhost / 127.0.0.1 / ::1 のみ接続できます。
+url = ""
+
+# ローカル推論は時間がかかることがあるため、クラウド API より長めです。
+timeout = 600
+temperature = 0.2
+max_output_tokens = 8192
+
+
 [api]
 # 使う API スタイルです。
 # 使える値:
@@ -295,7 +326,8 @@ anthropic_version = "2023-06-01"
 # 使い方:
 # 0. 必要なら `python3 -m babel_breaker_app --extract-lang ...` で元 lang JSON を取り出す
 # 1. 翻訳済み JSON 本文をコピー
-# 2. python3 -m babel_breaker_app
+# 2. `launch_gui.command` / `launch_gui.bat` を実行
+#    （Python を手で使うなら `python3 -m babel_breaker_app`）
 #
 # JSON の形式はこうです:
 # {
