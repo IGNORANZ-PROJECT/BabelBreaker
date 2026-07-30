@@ -1,7 +1,7 @@
 {
   "name": "Babel Breaker",
   "short_name": "Babel Breaker",
-  "description": "Translate Minecraft mods locally in your browser",
+  "description": "Translate game mods locally in your browser without uploading them",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f6f7f8",

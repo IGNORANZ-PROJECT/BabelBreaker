@@ -32,4 +32,4 @@ Please include:
 - Compressed local model files are pinned to an immutable Hugging Face commit by URL, byte size, and SHA-256 and are checked before browser-side decompression.
 - Firebase production builds exclude model binaries; CSP permits model downloads only from the selected Hugging Face delivery hosts.
 - Non-English translation pivots through English entirely inside local WebAssembly workers.
-- Untrusted archives are subject to path, entry-count, namespace, and decompressed-size validation.
+- Untrusted archives are subject to path, entry-count, format, namespace, and decompressed-size validation.

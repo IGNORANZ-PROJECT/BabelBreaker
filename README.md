@@ -2,14 +2,18 @@
 
 [English](README.en.md)
 
-Minecraft MOD の言語ファイルから原文言語を自動判定し、10言語へ翻訳して、そのまま使えるリソースパック ZIP を作るブラウザアプリです。
+Minecraft、Factorio、Stardew Valley、RimWorldのMODから言語ファイルと原文言語を自動判定し、10言語へ翻訳して導入用ZIPを作るブラウザアプリです。
 
 JAR の解析、翻訳、ZIP 生成はすべてユーザーのブラウザ内で行われます。MOD や翻訳内容をサーバーへアップロードしません。
 
 ## 新しいブラウザ版
 
 - 1件または複数の `.jar` / `.zip` をドラッグ＆ドロップ
-- Fabric / Forge / NeoForge / Quilt のメタデータを検出
+- 対応ゲームと形式を自動判定
+  - Minecraft Java Edition: `.json` / `.lang`、Fabric / Forge / NeoForge / Quilt
+  - Factorio: `locale/<language>/*.cfg`
+  - Stardew Valley: Content Patcher `i18n/*.json`
+  - RimWorld: `Languages` 内の Keyed / DefInjected XML
 - 複数 namespace と `.json` / `.lang` に対応
 - `en_us`、`fr_fr`、`de_de` などのMinecraft言語コードと本文から原文言語を自動判定
 - ファイル名の宣言言語と本文の検出言語を分け、日本語・韓国語の高信頼な不一致を項目単位で表示
@@ -29,8 +33,9 @@ JAR の解析、翻訳、ZIP 生成はすべてユーザーのブラウザ内で
 - 「要確認」には未翻訳も含め、未翻訳・エラー・判定保留・機械翻訳の順で表示
 - 空の原文は翻訳対象外として扱い、未翻訳件数には含めない
 - 項目単位または一括で無視し、未翻訳・無視・安全でない項目を除外していつでもZIPを作成
-- 複数MODを1つの翻訳リソースパックへ統合
+- 同じゲームの複数MODを1つの翻訳ZIPへ統合
 - Minecraft 1.11–1.21.11 / 26.1 向けリソースパックを生成
+- Factorio・Stardew Valley・RimWorld向けに、元のMODへ統合できる翻訳ファイルだけのZIPを生成
 - Firebase Hosting で静的配信
 
 API キー、Ollama、LM Studio、ユーザー登録は不要です。
@@ -85,14 +90,16 @@ Firebase SDK は使用していません。Hosting はアプリの静的ファ�
 
 ## 基本フロー
 
-1. 1件または複数の MOD JAR をドロップ
-2. 自動検出された MOD・Minecraft バージョン・原文言語を確認
+1. 1件または複数の MOD JAR / ZIP をドロップ
+2. 自動検出されたゲーム・MOD・原文言語を確認
 3. 「この端末で翻訳」または「外部ツールで翻訳」を選択
    - 外部ツール方式では依頼文をコピーするか、原文JSONを保存
    - 翻訳結果は貼り付けるか、JSON / TXTファイルを読み込み
 4. 「要確認」に表示された翻訳結果を確認・修正
-5. 単体または複数MODをまとめたリソースパック ZIP をダウンロード
-6. ZIP を解凍せず Minecraft の `resourcepacks` フォルダーへ入れる
+5. 単体または複数MODをまとめた翻訳 ZIP をダウンロード
+6. 画面に表示されるゲーム別手順に沿って導入
+   - MinecraftはZIPを解凍せず `resourcepacks` へ追加
+   - ほかのゲームはZIPを展開し、生成された言語フォルダーをバックアップ済みの元MODへ統合
 
 端末内翻訳を初めて使う場合は、必要な Mozilla モデルをダウンロードします。英語以外から別言語へ翻訳するときは、原文→英語と英語→翻訳先の2モデルを端末内で連結します。モデルはブラウザの Cache Storage に保存され、同じモデルは再利用されます。WebAssembly / Web Worker に対応していない環境や、端末内モデルがない原文ロケールでは、外部ツール方式が自動で選択されます。外部ツール用の依頼文にも、検出した原文言語がnamespaceごとに記載されます。
 
@@ -103,7 +110,7 @@ BabelBreaker/
 ├─ index.html
 ├─ src/
 │  ├─ app.js          # UI と操作フロー
-│  ├─ core.js         # JAR解析・翻訳保護・ZIP生成
+│  ├─ core.js         # 対応ゲーム判定・翻訳保護・ZIP生成
 │  ├─ i18n.js         # UIの5言語表示
 │  ├─ languages.js    # 原文・翻訳先とMinecraft言語コード
 │  ├─ local-translator.js # Bergamotモデル・Worker管理
@@ -161,4 +168,4 @@ MIT License
 
 本番ビルドには、実行時依存パッケージのライセンス全文を収録した `THIRD_PARTY_NOTICES.txt` も含まれます。
 
-Babel Breaker は非公式のコミュニティツールで、Mojang Studios および Microsoft とは関係ありません。生成した翻訳パックを公開・再配布するときは、対象 MOD のライセンスと作者の方針を確認してください。
+Babel Breaker は各対応ゲームの開発元・販売元とは関係のない非公式コミュニティツールです。生成した翻訳を公開・再配布するときは、対象 MOD のライセンスと作者の方針を確認してください。

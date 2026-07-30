@@ -9,19 +9,71 @@
     />
     <meta name="theme-color" content="#ffffff" />
     <meta name="robots" content="index,follow" />
+    <link rel="canonical" href="https://babel-breaker.web.app/" />
+    <link rel="alternate" hreflang="x-default" href="https://babel-breaker.web.app/" />
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="Babel Breaker — Translate Minecraft Mods" />
+    <meta property="og:site_name" content="Babel Breaker" />
+    <meta property="og:url" content="https://babel-breaker.web.app/" />
+    <meta property="og:title" content="Babel Breaker — Translate Game Mods in Your Browser" />
     <meta
       property="og:description"
-      content="Translate mods locally in your browser and create a resource pack without uploading the mod. Open source under the MIT License."
+      content="Translate Minecraft, Factorio, Stardew Valley, and RimWorld mods locally in your browser without uploading the mod."
     />
+    <meta property="og:image" content="https://babel-breaker.web.app/icon.png" />
+    <meta property="og:image:alt" content="Babel Breaker icon" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Babel Breaker — Browser Mod Translator" />
+    <meta
+      name="twitter:description"
+      content="Private, open-source mod translation for Minecraft, Factorio, Stardew Valley, and RimWorld."
+    />
+    <meta name="twitter:image" content="https://babel-breaker.web.app/icon.png" />
     <link rel="icon" href="/icon-ui.png" type="image/png" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <title>Babel Breaker — Translate Minecraft Mods</title>
+    <title>Babel Breaker — Translate Game Mods in Your Browser</title>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Babel Breaker",
+        "url": "https://babel-breaker.web.app/",
+        "description": "A private, open-source browser tool for translating Minecraft, Factorio, Stardew Valley, and RimWorld mods.",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "Any",
+        "browserRequirements": "Requires JavaScript, WebAssembly, and Web Workers for local translation",
+        "isAccessibleForFree": true,
+        "license": "https://opensource.org/license/mit",
+        "codeRepository": "https://github.com/IGNORANZ-PROJECT/BabelBreaker",
+        "inLanguage": ["en", "ja", "ko", "zh-Hans", "es"],
+        "featureList": [
+          "Processes mod archives without uploading them",
+          "Translates text locally in the browser",
+          "Supports Minecraft, Factorio, Stardew Valley, and RimWorld language formats",
+          "Exports installable or merge-ready translation ZIP files"
+        ],
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      }
+    </script>
   </head>
   <body>
     <div id="app"></div>
-    <noscript>JavaScript is required to use Babel Breaker.</noscript>
+    <noscript>
+      <main>
+        <h1>Babel Breaker — browser-based game mod translator</h1>
+        <p>
+          Translate Minecraft, Factorio, Stardew Valley, and RimWorld mod language
+          files without uploading the mod. JavaScript is required to run the tool.
+        </p>
+        <p>
+          Babel Breaker is free and open-source software under the MIT License.
+          <a href="https://github.com/IGNORANZ-PROJECT/BabelBreaker">View the source code on GitHub.</a>
+        </p>
+      </main>
+    </noscript>
     <script type="module" src="/src/app.js"></script>
   </body>
 </html>

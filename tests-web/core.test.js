@@ -14,6 +14,7 @@ import {
   createDemoProject,
   extractPlaceholderTokens,
   getProjectStats,
+  getGameTargetLocale,
   parseGlossary,
   parseLegacyLang,
   placeholdersMatch,
@@ -41,6 +42,13 @@ async function makeModFile({
   for (const [path, contents] of Object.entries(files)) zip.file(path, contents);
   const archive = await zip.generateAsync({ type: "uint8array" });
   return new File([archive], name, { type: "application/java-archive" });
+}
+
+async function makeArchiveFile(name, files) {
+  const zip = new JSZip();
+  for (const [path, contents] of Object.entries(files)) zip.file(path, contents);
+  const archive = await zip.generateAsync({ type: "uint8array" });
+  return new File([archive], name, { type: "application/zip" });
 }
 
 test("legacy .lang parser preserves values after the first separator", () => {
@@ -152,6 +160,103 @@ test("JAR analysis tracks different source languages per namespace", async () =>
     project.entries.map((entry) => entry.sourceLanguage),
     ["de", "es"],
   );
+});
+
+test("Factorio locale CFG is auto-detected and exported as a merge-ready ZIP", async () => {
+  const project = await analyzeArchive(
+    await makeArchiveFile("example-factorio_1.0.0.zip", {
+      "example-factorio_1.0.0/info.json": JSON.stringify({
+        name: "example-factorio",
+        title: "Example Factorio Mod",
+        version: "1.0.0",
+      }),
+      "example-factorio_1.0.0/locale/en/base.cfg":
+        "[item-name]\nexample-item=Example item\n\n[mod-setting-name]\nexample=Example setting\n",
+    }),
+  );
+
+  assert.equal(project.game, "factorio");
+  assert.equal(project.mod.name, "Example Factorio Mod");
+  assert.equal(project.targetLocale, "ja");
+  assert.equal(project.entries.length, 2);
+  project.entries.forEach((entry) => {
+    entry.translation = `訳:${entry.source}`;
+    entry.status = "edited";
+  });
+
+  const { archive } = await buildResourcePack(project, undefined, "nodebuffer");
+  const zip = await JSZip.loadAsync(archive);
+  const output = await zip
+    .file("example-factorio_1.0.0/locale/ja/base.cfg")
+    .async("string");
+  assert.match(output, /\[item-name\]\nexample-item=訳:Example item/);
+  assert.ok(zip.file("_BABEL_BREAKER_README.txt"));
+});
+
+test("Stardew Valley Content Patcher i18n JSON is auto-detected", async () => {
+  const project = await analyzeArchive(
+    await makeArchiveFile("ExampleStardew.zip", {
+      "ExampleStardew/manifest.json": JSON.stringify({
+        Name: "Example Stardew Mod",
+        UniqueID: "Example.Author.Mod",
+        Version: "2.0.0",
+      }),
+      "ExampleStardew/i18n/default.json": JSON.stringify({
+        greeting: "Welcome to the farm!",
+      }),
+    }),
+    { targetLanguage: "de" },
+  );
+
+  assert.equal(project.game, "stardew");
+  assert.equal(project.targetLocale, "de");
+  project.entries[0].translation = "Willkommen auf dem Bauernhof!";
+  project.entries[0].status = "edited";
+  const { archive } = await buildResourcePack(project, undefined, "nodebuffer");
+  const zip = await JSZip.loadAsync(archive);
+  assert.deepEqual(
+    JSON.parse(await zip.file("ExampleStardew/i18n/de.json").async("string")),
+    { greeting: "Willkommen auf dem Bauernhof!" },
+  );
+});
+
+test("RimWorld Keyed and DefInjected XML are auto-detected", async () => {
+  const project = await analyzeArchive(
+    await makeArchiveFile("ExampleRimWorld.zip", {
+      "ExampleRimWorld/About/About.xml":
+        "<ModMetaData><name>Example RimWorld Mod</name><packageId>example.rimworld</packageId></ModMetaData>",
+      "ExampleRimWorld/Languages/English/Keyed/UI.xml":
+        "<LanguageData><Example.Button>Start game</Example.Button></LanguageData>",
+      "ExampleRimWorld/Languages/English/DefInjected/ThingDef/Items.xml":
+        "<LanguageData><ExampleItem.label>example item</ExampleItem.label></LanguageData>",
+    }),
+  );
+
+  assert.equal(project.game, "rimworld");
+  assert.equal(project.targetLocale, "Japanese");
+  assert.equal(project.entries.length, 2);
+  for (const entry of project.entries) {
+    entry.translation = `訳:${entry.source}`;
+    entry.status = "edited";
+  }
+  const { archive } = await buildResourcePack(project, undefined, "nodebuffer");
+  const zip = await JSZip.loadAsync(archive);
+  assert.ok(
+    zip.file("ExampleRimWorld/Languages/Japanese/Keyed/UI.xml"),
+  );
+  assert.match(
+    await zip
+      .file("ExampleRimWorld/Languages/Japanese/DefInjected/ThingDef/Items.xml")
+      .async("string"),
+    /<ExampleItem\.label>訳:example item<\/ExampleItem\.label>/,
+  );
+});
+
+test("each supported game uses its native target locale name", () => {
+  assert.equal(getGameTargetLocale("minecraft", "ja"), "ja_jp");
+  assert.equal(getGameTargetLocale("factorio", "zh-Hans"), "zh-CN");
+  assert.equal(getGameTargetLocale("stardew", "pt"), "pt");
+  assert.equal(getGameTargetLocale("rimworld", "ja"), "Japanese");
 });
 
 test("multiple MOD projects combine into one installable resource pack", async () => {
