@@ -13,6 +13,7 @@
 # Dependencies and build output
 node_modules/
 dist/
+.vite/
 public/bergamot/
 public/model-registry.json
 public/models/
