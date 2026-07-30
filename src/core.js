@@ -20,6 +20,50 @@ export const MAX_METADATA_TEXT_LENGTH = 2 * 1024 * 1024;
 export const MAX_BATCH_FILES = 50;
 export const MAX_BATCH_BYTES = 1024 * 1024 * 1024;
 
+export const SUPPORTED_GAMES = {
+  minecraft: {
+    id: "minecraft",
+    name: "Minecraft",
+    format: "Java Edition lang JSON / LANG",
+  },
+  factorio: {
+    id: "factorio",
+    name: "Factorio",
+    format: "locale CFG",
+  },
+  stardew: {
+    id: "stardew",
+    name: "Stardew Valley",
+    format: "Content Patcher i18n JSON",
+  },
+  rimworld: {
+    id: "rimworld",
+    name: "RimWorld",
+    format: "Languages XML",
+  },
+};
+
+const GAME_TARGET_LOCALES = {
+  factorio: {
+    ja: "ja", ko: "ko", "zh-Hans": "zh-CN", "zh-Hant": "zh-TW",
+    de: "de", es: "es-ES", fr: "fr", pt: "pt-BR", ru: "ru", it: "it",
+  },
+  stardew: {
+    ja: "ja", ko: "ko", "zh-Hans": "zh", "zh-Hant": "zh-TW",
+    de: "de", es: "es", fr: "fr", pt: "pt", ru: "ru", it: "it",
+  },
+  rimworld: {
+    ja: "Japanese", ko: "Korean", "zh-Hans": "ChineseSimplified",
+    "zh-Hant": "ChineseTraditional", de: "German", es: "Spanish",
+    fr: "French", pt: "PortugueseBrazilian", ru: "Russian", it: "Italian",
+  },
+};
+
+export function getGameTargetLocale(game, languageId) {
+  const language = getTargetLanguage(languageId);
+  return GAME_TARGET_LOCALES[game]?.[language.id] || language.minecraftLocale;
+}
+
 export const MINECRAFT_VERSIONS = [
   { id: "26.1", label: "26.1", min: [84, 0], max: 84, legacyLang: false },
   { id: "1.21.11", label: "1.21.11", min: [75, 0], max: 75, legacyLang: false },
@@ -387,6 +431,341 @@ function chooseSource(sources, targetLocale = TARGET_LOCALE) {
   return sorted.find((source) => source.locale !== targetLocale) || sorted[0];
 }
 
+function languageFromGameLocale(locale) {
+  const normalized = String(locale || "")
+    .trim()
+    .replaceAll("_", "-")
+    .toLowerCase();
+  if (!normalized || normalized === "default" || normalized === "english") return "en";
+  if (
+    normalized === "chinesesimplified" ||
+    normalized.startsWith("zh-cn") ||
+    normalized === "zh"
+  ) return "zh-Hans";
+  if (
+    normalized === "chinesetraditional" ||
+    normalized.startsWith("zh-tw") ||
+    normalized.startsWith("zh-hk")
+  ) return "zh-Hant";
+  const rimWorldLocales = {
+    japanese: "ja",
+    korean: "ko",
+    german: "de",
+    spanish: "es",
+    french: "fr",
+    portuguesebrazilian: "pt",
+    russian: "ru",
+    italian: "it",
+  };
+  if (rimWorldLocales[normalized]) return rimWorldLocales[normalized];
+  const prefix = normalized.split("-")[0];
+  return ["en", "ja", "ko", "de", "es", "fr", "pt", "ru", "it"].includes(prefix)
+    ? prefix
+    : null;
+}
+
+function chooseGameSource(sources, targetLocale) {
+  const priority = ["en", "en-us", "default", "english"];
+  return [...sources].sort((left, right) => {
+    const leftLocale = left.locale.toLowerCase();
+    const rightLocale = right.locale.toLowerCase();
+    const leftScore = priority.indexOf(leftLocale);
+    const rightScore = priority.indexOf(rightLocale);
+    const normalizedLeft = leftScore < 0 ? 100 : leftScore;
+    const normalizedRight = rightScore < 0 ? 100 : rightScore;
+    if (normalizedLeft !== normalizedRight) return normalizedLeft - normalizedRight;
+    if (leftLocale === String(targetLocale).toLowerCase()) return 1;
+    if (rightLocale === String(targetLocale).toLowerCase()) return -1;
+    return left.path.localeCompare(right.path);
+  })[0];
+}
+
+function parseFactorioLocale(text) {
+  const data = {};
+  let section = "";
+  for (const rawLine of String(text).split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith(";") || line.startsWith("#")) continue;
+    const sectionMatch = line.match(/^\[([^\]]+)\]$/);
+    if (sectionMatch) {
+      section = sectionMatch[1].trim();
+      continue;
+    }
+    const separator = line.indexOf("=");
+    if (separator < 1) continue;
+    const key = line.slice(0, separator).trim();
+    if (key) defineOwnValue(data, `${section}\u0000${key}`, line.slice(separator + 1));
+  }
+  return data;
+}
+
+function stringifyFactorioLocale(data) {
+  const sections = new Map();
+  for (const [compoundKey, value] of Object.entries(data)) {
+    const separator = compoundKey.indexOf("\u0000");
+    const section = separator >= 0 ? compoundKey.slice(0, separator) : "";
+    const key = separator >= 0 ? compoundKey.slice(separator + 1) : compoundKey;
+    if (!sections.has(section)) sections.set(section, []);
+    sections.get(section).push(`${key}=${String(value).replace(/\r?\n/g, "\\n")}`);
+  }
+  return `${[...sections]
+    .flatMap(([section, lines]) => [
+      ...(section ? [`[${section}]`] : []),
+      ...lines,
+      "",
+    ])
+    .join("\n")}`;
+}
+
+function decodeXmlText(text) {
+  return String(text)
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&amp;", "&");
+}
+
+function escapeXmlText(text) {
+  return String(text)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function parseRimWorldLanguageXml(text) {
+  const data = {};
+  const withoutComments = String(text).replace(/<!--[\s\S]*?-->/g, "");
+  const leafPattern = /<([A-Za-z_][\w.-]*)\b[^>]*>([^<]*)<\/\1>/g;
+  for (const match of withoutComments.matchAll(leafPattern)) {
+    if (match[1] === "LanguageData") continue;
+    defineOwnValue(data, match[1], decodeXmlText(match[2]));
+  }
+  return data;
+}
+
+function stringifyRimWorldLanguageXml(data) {
+  const lines = Object.entries(data).map(
+    ([key, value]) => `  <${key}>${escapeXmlText(value)}</${key}>`,
+  );
+  return `<?xml version="1.0" encoding="utf-8"?>\n<LanguageData>\n${lines.join("\n")}\n</LanguageData>\n`;
+}
+
+async function parseJsonMetadata(entry, fallback = {}) {
+  if (!entry) return fallback;
+  try {
+    return JSON.parse(await readEntryText(entry, entry.name, MAX_METADATA_TEXT_LENGTH));
+  } catch {
+    return fallback;
+  }
+}
+
+async function analyzeGameArchive(
+  archiveEntries,
+  file,
+  game,
+  targetLanguage,
+) {
+  const language = getTargetLanguage(targetLanguage);
+  const targetLocale = getGameTargetLocale(game, language.id);
+  const warnings = [];
+  const sources = [];
+  let mod;
+
+  if (game === "factorio") {
+    const infoEntry = archiveEntries.find(
+      (entry) => !entry.dir && /(^|\/)info\.json$/i.test(entry.name),
+    );
+    const info = await parseJsonMetadata(infoEntry);
+    const root = infoEntry?.name.replace(/info\.json$/i, "") || "";
+    mod = {
+      loader: "Factorio",
+      id: cleanMetadataValue(info.name, sanitizeFileName(file.name)),
+      name: cleanMetadataValue(info.title || info.name, friendlyNameFromFilename(file.name)),
+      version: cleanMetadataValue(info.version, versionFromFilename(file.name) || "unknown"),
+      root,
+    };
+    for (const entry of archiveEntries.filter(
+      (candidate) => !candidate.dir && /(^|\/)locale\/[^/]+\/[^/]+\.cfg$/i.test(candidate.name),
+    )) {
+      const match = entry.name.match(/^(.*?locale\/)([^/]+)\/([^/]+\.cfg)$/i);
+      try {
+        sources.push({
+          namespace: `${match[1]}${match[3]}`,
+          locale: match[2],
+          path: entry.name,
+          outputPath: `${match[1]}${targetLocale}/${match[3]}`,
+          format: "factorio",
+          data: parseFactorioLocale(await readEntryText(entry, entry.name)),
+        });
+      } catch (error) {
+        warnings.push(`${entry.name}: ${error.message}`);
+      }
+    }
+  } else if (game === "stardew") {
+    const manifestEntry = archiveEntries.find(
+      (entry) => !entry.dir && /(^|\/)manifest\.json$/i.test(entry.name),
+    );
+    const manifest = await parseJsonMetadata(manifestEntry);
+    const root = manifestEntry?.name.replace(/manifest\.json$/i, "") || "";
+    mod = {
+      loader: "Content Patcher",
+      id: cleanMetadataValue(manifest.UniqueID, sanitizeFileName(file.name)),
+      name: cleanMetadataValue(manifest.Name, friendlyNameFromFilename(file.name)),
+      version: cleanMetadataValue(manifest.Version, versionFromFilename(file.name) || "unknown"),
+      root,
+    };
+    for (const entry of archiveEntries.filter(
+      (candidate) => !candidate.dir && /(^|\/)i18n\/[^/]+\.json$/i.test(candidate.name),
+    )) {
+      const match = entry.name.match(/^(.*?i18n\/)([^/]+)\.json$/i);
+      try {
+        sources.push({
+          namespace: match[1].replace(/\/$/, ""),
+          locale: match[2],
+          path: entry.name,
+          outputPath: `${match[1]}${targetLocale}.json`,
+          format: "json",
+          data: validateLangMap(
+            JSON.parse(await readEntryText(entry, entry.name)),
+            entry.name,
+          ),
+        });
+      } catch (error) {
+        warnings.push(`${entry.name}: ${error.message}`);
+      }
+    }
+  } else if (game === "rimworld") {
+    const aboutEntry = archiveEntries.find(
+      (entry) => !entry.dir && /(^|\/)about\/about\.xml$/i.test(entry.name),
+    );
+    const aboutText = aboutEntry
+      ? await readEntryText(aboutEntry, aboutEntry.name, MAX_METADATA_TEXT_LENGTH)
+      : "";
+    const value = (name) =>
+      decodeXmlText(aboutText.match(new RegExp(`<${name}>([^<]+)</${name}>`, "i"))?.[1] || "");
+    const root = aboutEntry?.name.replace(/About\/About\.xml$/i, "") || "";
+    mod = {
+      loader: "RimWorld",
+      id: cleanMetadataValue(value("packageId"), sanitizeFileName(file.name)),
+      name: cleanMetadataValue(value("name"), friendlyNameFromFilename(file.name)),
+      version: "unknown",
+      root,
+    };
+    for (const entry of archiveEntries.filter(
+      (candidate) =>
+        !candidate.dir &&
+        /(^|\/)languages\/[^/]+\/(?:keyed|definjected)\/.+\.xml$/i.test(candidate.name),
+    )) {
+      const match = entry.name.match(
+        /^(.*?languages\/)([^/]+)\/((?:keyed|definjected)\/.+\.xml)$/i,
+      );
+      try {
+        sources.push({
+          namespace: `${match[1]}${match[3]}`,
+          locale: match[2],
+          path: entry.name,
+          outputPath: `${match[1]}${targetLocale}/${match[3]}`,
+          format: "rimworld",
+          data: parseRimWorldLanguageXml(await readEntryText(entry, entry.name)),
+        });
+      } catch (error) {
+        warnings.push(`${entry.name}: ${error.message}`);
+      }
+    }
+  }
+
+  if (!sources.length) return null;
+  const grouped = new Map();
+  for (const source of sources) {
+    if (!grouped.has(source.namespace)) grouped.set(source.namespace, []);
+    grouped.get(source.namespace).push(source);
+  }
+
+  const namespaces = [];
+  const entries = [];
+  for (const [namespace, candidates] of grouped) {
+    const source = chooseGameSource(candidates, targetLocale);
+    const existingTarget = candidates.find(
+      (candidate) => candidate.locale.toLowerCase() === targetLocale.toLowerCase(),
+    );
+    const preserved = existingTarget ? { ...existingTarget.data } : {};
+    const sourceLanguage = languageFromGameLocale(source.locale);
+    const entryIds = [];
+    for (const [key, sourceText] of Object.entries(source.data)) {
+      const targetText = preserved[key];
+      const sourceIsEmpty = !String(sourceText).trim();
+      const languageMetadata = classifyEntryLanguage(sourceText, sourceLanguage);
+      const sourceIsTarget =
+        source.locale.toLowerCase() === targetLocale.toLowerCase() ||
+        languageMetadata.sourceLanguage === language.id;
+      const needsTranslation =
+        !sourceIsEmpty &&
+        !languageMetadata.translationBlocked &&
+        !sourceIsTarget &&
+        shouldTranslate(sourceText, targetText);
+      const id = String(entries.length);
+      entryIds.push(id);
+      entries.push({
+        id,
+        namespace,
+        key,
+        source: sourceText,
+        ...languageMetadata,
+        sourceLocale: source.locale,
+        translation: sourceIsEmpty
+          ? ""
+          : sourceIsTarget
+            ? sourceText
+            : needsTranslation || languageMetadata.translationBlocked
+              ? ""
+              : targetText ?? sourceText,
+        status: sourceIsEmpty
+          ? "excluded"
+          : needsTranslation || languageMetadata.translationBlocked
+            ? "pending"
+            : "preserved",
+        ignored: false,
+        warning: "",
+      });
+    }
+    namespaces.push({
+      namespace,
+      sourceLocale: source.locale,
+      sourceLanguage,
+      sourceLanguages: [sourceLanguage].filter(Boolean),
+      sourcePath: source.path,
+      outputPath: source.outputPath,
+      format: source.format,
+      existingTargetPath: existingTarget?.path || "",
+      preserved,
+      entryIds,
+    });
+  }
+  const sourceLanguages = [
+    ...new Set(entries.map((entry) => entry.sourceLanguage).filter(Boolean)),
+  ];
+  return {
+    game,
+    fileName: file.name,
+    fileSize: Number(file.size || 0),
+    mod,
+    sourceLanguage: sourceLanguages.length === 1 ? sourceLanguages[0] : null,
+    sourceLanguages,
+    unsupportedSourceLocales: namespaces
+      .filter((namespace) => !namespace.sourceLanguages.length)
+      .map((namespace) => namespace.sourceLocale),
+    targetLanguage: language.id,
+    targetLocale,
+    namespaces,
+    entries,
+    warnings,
+    createdAt: new Date().toISOString(),
+  };
+}
+
 function inferMinecraftVersion(expression, fileName) {
   const candidates = `${expression || ""} ${fileName || ""}`.match(/(?:1\.\d+|2\d)\.\d+(?:\.\d+)?/g) || [];
   const value = candidates[0] || "";
@@ -423,7 +802,7 @@ export async function analyzeArchive(
   const language = getTargetLanguage(targetLanguage);
   const resolvedTargetLocale = targetLocale || language.minecraftLocale;
   if (!file?.name || !/\.(jar|zip)$/i.test(file.name)) {
-    throw new Error("Minecraft MODの .jar または .zip を選択してください。");
+    throw new Error("MODの .jar または .zip を選択してください。");
   }
   if (Number(file.size || 0) > MAX_ARCHIVE_BYTES) {
     throw new Error("512MBを超えるファイルには対応していません。");
@@ -434,12 +813,12 @@ export async function analyzeArchive(
     const archiveData = typeof file.arrayBuffer === "function" ? await file.arrayBuffer() : file;
     zip = await JSZip.loadAsync(archiveData, { createFolders: false });
   } catch (error) {
-    throw new Error(`JARを開けませんでした。破損していないか確認してください。 (${error.message})`);
+    throw new Error(`アーカイブを開けませんでした。破損していないか確認してください。 (${error.message})`);
   }
 
   const archiveEntries = Object.values(zip.files);
   if (archiveEntries.length > MAX_ARCHIVE_ENTRIES) {
-    throw new Error("JAR内のファイル数が多すぎます。");
+    throw new Error("アーカイブ内のファイル数が多すぎます。");
   }
   archiveEntries.forEach(assertSafeArchivePath);
 
@@ -447,7 +826,31 @@ export async function analyzeArchive(
     (entry) => !entry.dir && /^assets\/[^/]+\/lang\/[^/]+\.(json|lang)$/i.test(entry.name),
   );
   if (!langEntries.length) {
-    throw new Error("langファイルが見つかりません。assets/<modid>/lang/ を確認してください。");
+    const detectedGame = archiveEntries.some(
+      (entry) => !entry.dir && /(^|\/)locale\/[^/]+\/[^/]+\.cfg$/i.test(entry.name),
+    )
+      ? "factorio"
+      : archiveEntries.some(
+            (entry) => !entry.dir && /(^|\/)i18n\/(?:default|en)\.json$/i.test(entry.name),
+          )
+        ? "stardew"
+        : archiveEntries.some(
+              (entry) =>
+                !entry.dir &&
+                /(^|\/)languages\/[^/]+\/(?:keyed|definjected)\/.+\.xml$/i.test(entry.name),
+            )
+          ? "rimworld"
+          : null;
+    if (detectedGame) {
+      const project = await analyzeGameArchive(
+        archiveEntries,
+        file,
+        detectedGame,
+        language.id,
+      );
+      if (project) return project;
+    }
+    throw new Error("対応する言語ファイルが見つかりません。");
   }
 
   const declaredLangBytes = langEntries.reduce(
@@ -583,6 +986,7 @@ export async function analyzeArchive(
   ];
 
   return {
+    game: "minecraft",
     fileName: file.name,
     fileSize: Number(file.size || 0),
     mod,
@@ -618,6 +1022,10 @@ export function combineProjects(projects) {
 
   const targetLanguage = validProjects[0].targetLanguage;
   const targetLocale = validProjects[0].targetLocale;
+  const game = validProjects[0].game || "minecraft";
+  if (validProjects.some((project) => (project.game || "minecraft") !== game)) {
+    throw new Error("異なるゲームのMODは同じ一括出力にまとめられません。");
+  }
   if (
     validProjects.some(
       (project) =>
@@ -651,6 +1059,8 @@ export function combineProjects(projects) {
           sourceLocales: [],
           sourceLanguages: [],
           sourcePath: namespace.sourcePath,
+          outputPath: namespace.outputPath,
+          format: namespace.format,
           existingTargetPath: namespace.existingTargetPath,
           preserved: {},
           entryIds: [],
@@ -744,11 +1154,14 @@ export function combineProjects(projects) {
     )
     .filter((index) => index >= 0);
   const minecraftVersion =
-    MINECRAFT_VERSIONS[Math.min(...versionIndexes)]?.id ||
-    validProjects[0].minecraftVersion;
+    game === "minecraft"
+      ? MINECRAFT_VERSIONS[Math.min(...versionIndexes)]?.id ||
+        validProjects[0].minecraftVersion
+      : undefined;
   const loaders = [...new Set(validProjects.map((project) => project.mod.loader))];
 
   return {
+    game,
     fileName: `${validProjects.length}-mods`,
     fileNames: validProjects.map((project) => project.fileName),
     fileSize: totalBytes,
@@ -799,6 +1212,7 @@ export function createDemoProject({
     warning: "",
   }));
   return {
+    game: "minecraft",
     fileName: "babel-breaker-demo-1.21.1.jar",
     fileSize: 42_240,
     mod: {
@@ -915,6 +1329,7 @@ export function buildClipboardPayload(project) {
 
 export function buildTranslationRequest(project) {
   const target = getTargetLanguage(project.targetLanguage);
+  const game = SUPPORTED_GAMES[project.game || "minecraft"];
   const sourceLines = project.namespaces.map((namespace) => {
     const sourceLanguages = namespace.sourceLanguages?.length
       ? namespace.sourceLanguages
@@ -932,8 +1347,8 @@ export function buildTranslationRequest(project) {
     return `- ${namespace.namespace}: ${sourceName} [${sourceLocales.join(", ")}]`;
   });
   return [
-    "The following is Minecraft mod language JSON.",
-    "The source language was detected from each Minecraft language filename:",
+    `The following is ${game.name} mod language data represented as JSON.`,
+    "The source language was detected from each language filename and its contents:",
     ...sourceLines,
     `Translate only the values into ${target.englishName} (${target.nativeName}). Never change a key.`,
     "Use each namespace's detected source language. Use concise, natural wording suitable for short in-game UI text.",
@@ -1285,6 +1700,52 @@ export function sanitizeFileName(value) {
 
 export async function buildResourcePack(project, versionId = project.minecraftVersion, outputType = "blob") {
   const stats = getProjectStats(project);
+  const game = project.game || "minecraft";
+  if (game !== "minecraft") {
+    const zip = new JSZip();
+    const entriesById = new Map(project.entries.map((entry) => [entry.id, entry]));
+    for (const namespace of project.namespaces) {
+      const translated = { ...namespace.preserved };
+      for (const id of namespace.entryIds) {
+        const entry = entriesById.get(id);
+        if (entry && shouldIncludeEntryInOutput(entry)) translated[entry.key] = entry.translation;
+        else if (entry) delete translated[entry.key];
+      }
+      const contents =
+        namespace.format === "factorio"
+          ? stringifyFactorioLocale(translated)
+          : namespace.format === "rimworld"
+            ? stringifyRimWorldLanguageXml(translated)
+            : `${JSON.stringify(translated, null, 2)}\n`;
+      zip.file(namespace.outputPath, contents);
+    }
+    zip.file(
+      "_BABEL_BREAKER_README.txt",
+      [
+        `${APP_NAME} browser edition`,
+        `game=${SUPPORTED_GAMES[game].name}`,
+        `mod=${project.mod.name}`,
+        `target_locale=${project.targetLocale}`,
+        `output_entries=${stats.output}`,
+        `omitted_entries=${stats.omitted}`,
+        "",
+        "This ZIP contains only generated translation files.",
+        "Merge its folders into the original mod folder. Keep a backup of the original mod.",
+        "The source mod was processed locally and is not included.",
+        "",
+      ].join("\n"),
+    );
+    const archive = await zip.generateAsync({
+      type: outputType,
+      compression: "DEFLATE",
+      compressionOptions: { level: 6 },
+      platform: "UNIX",
+    });
+    return {
+      archive,
+      filename: `${sanitizeFileName(project.mod.name)}_${project.targetLocale}_translation.zip`,
+    };
+  }
   const version = getMinecraftVersion(versionId);
   const zip = new JSZip();
   const entriesById = new Map(project.entries.map((entry) => [entry.id, entry]));

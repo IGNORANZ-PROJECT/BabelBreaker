@@ -2,15 +2,19 @@
 
 [日本語](README.md)
 
-Babel Breaker is an open-source browser tool that detects the source language of Minecraft mod language files, translates them into ten target languages, and builds an installable resource-pack ZIP.
+Babel Breaker is an open-source browser tool that detects and translates language files from Minecraft, Factorio, Stardew Valley, and RimWorld mods into ten target languages.
 
 The mod archive, extracted text, glossary, translation, and generated ZIP stay in the user's browser. There is no application backend, account, or API key.
 
 ## Features
 
 - Drag and drop one or multiple `.jar` or `.zip` mod files
-- Detect Fabric, Forge, NeoForge, and Quilt metadata
-- Read multiple namespaces and both `.json` and legacy `.lang` files
+- Auto-detect the game and supported language-file format
+  - Minecraft Java Edition `.json` / `.lang`
+  - Factorio `locale/<language>/*.cfg`
+  - Stardew Valley Content Patcher `i18n/*.json`
+  - RimWorld Keyed and DefInjected XML
+- Detect Fabric, Forge, NeoForge, and Quilt metadata for Minecraft
 - Keep the locale-declared language separate from the content-detected language and show high-confidence mismatches per entry
 - Avoid auto-translating Han-only text when Japanese and Chinese cannot be distinguished safely
 - Translate locally with Mozilla Bergamot and WebAssembly
@@ -25,8 +29,9 @@ The mod archive, extracted text, glossary, translation, and generated ZIP stay i
 - Include untranslated entries in the default review queue and sort them before errors, unclear languages, and machine translations
 - Treat blank source values as non-translatable instead of untranslated
 - Ignore entries individually or in bulk and omit unresolved, ignored, or unsafe entries without blocking ZIP creation
-- Combine several mods into one translation resource pack
+- Combine several mods from the same game into one translation ZIP
 - Build resource packs for Minecraft 1.11–1.21.11 and 26.1
+- Build merge-ready translation-only ZIPs for Factorio, Stardew Valley, and RimWorld
 - Copy a request or download source JSON for an external translation tool
 - Paste, select, or drop a translated JSON/TXT file back into the review flow
 
@@ -87,4 +92,4 @@ See [Privacy](PRIVACY.md) and [Security Policy](SECURITY.md).
 
 Babel Breaker is available under the [MIT License](LICENSE). Runtime dependencies and translation models retain their own licenses; production builds include `THIRD_PARTY_NOTICES.txt`.
 
-Babel Breaker is an unofficial community tool and is not affiliated with Mojang Studios or Microsoft. Check a mod's license and author policy before publishing or redistributing generated translations.
+Babel Breaker is an unofficial community tool and is not affiliated with the developers or publishers of any supported game. Check a mod's license and author policy before publishing or redistributing generated translations.

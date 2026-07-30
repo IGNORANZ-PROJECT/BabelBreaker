@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Multilingual Minecraft MOD resource-pack generator with local browser translation.",
+  "description": "Private browser-based translation tool for Minecraft, Factorio, Stardew Valley, and RimWorld mods.",
   "scripts": {
     "prepare:legal": "node scripts/prepare-legal.mjs",
     "prepare:registry": "node scripts/prepare-registry.mjs",

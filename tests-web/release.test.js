@@ -97,3 +97,19 @@ test("required Web assets are present", async () => {
     assert.ok(stats.size > 0);
   }
 });
+
+test("public SEO metadata is complete and crawlable", async () => {
+  const html = await read("index.html");
+  assert.match(html, /rel="canonical" href="https:\/\/babel-breaker\.web\.app\/"/);
+  assert.match(html, /property="og:url"/);
+  assert.match(html, /name="twitter:card"/);
+  assert.match(html, /type="application\/ld\+json"/);
+  assert.match(html, /"@type": "WebApplication"/);
+  assert.match(html, /Minecraft, Factorio, Stardew Valley, and RimWorld/);
+
+  const robots = await read("public/robots.txt");
+  assert.match(robots, /Allow: \//);
+  assert.match(robots, /https:\/\/babel-breaker\.web\.app\/sitemap\.xml/);
+  const sitemap = await read("public/sitemap.xml");
+  assert.match(sitemap, /<loc>https:\/\/babel-breaker\.web\.app\/<\/loc>/);
+});

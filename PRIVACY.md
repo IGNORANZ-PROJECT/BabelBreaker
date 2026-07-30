@@ -1,6 +1,6 @@
 # Privacy
 
-Babel Breaker is designed to process Minecraft MOD translation data locally in the user's browser.
+Babel Breaker is designed to process game MOD translation data locally in the user's browser. The current release supports Minecraft, Factorio, Stardew Valley Content Patcher, and RimWorld language-file formats.
 
 ## Data the application does not collect
 
@@ -16,7 +16,7 @@ The browser version does not include an application backend.
 
 ## Local translation model
 
-Local translation uses the Mozilla Bergamot WebAssembly engine. Babel Breaker detects source languages from Minecraft locale filenames. Supported local source languages are English, Japanese, Korean, Simplified Chinese, Traditional Chinese, German, Spanish, French, Portuguese, Russian, and Italian; the same set except English is available as a target. For non-English language pairs, the browser translates source-to-English and then English-to-target without sending either stage outside the device.
+Local translation uses the Mozilla Bergamot WebAssembly engine. Babel Breaker detects source languages from each supported game's locale filenames and the text itself. Supported local source languages are English, Japanese, Korean, Simplified Chinese, Traditional Chinese, German, Spanish, French, Portuguese, Russian, and Italian; the same set except English is available as a target. For non-English language pairs, the browser translates source-to-English and then English-to-target without sending either stage outside the device.
 
 The browser downloads only the required compressed models from an immutable commit in the public `mukowaty/firefox-translations` Hugging Face repository. That repository mirrors Mozilla Firefox Translations models. Babel Breaker verifies the compressed byte size and SHA-256 before expanding a model. Requests contain only static model-file paths; they do not contain MOD text, extracted language entries, glossary entries, or translation results.
 

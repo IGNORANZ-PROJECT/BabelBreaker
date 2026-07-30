@@ -4,6 +4,7 @@ import {
   MAX_BATCH_BYTES,
   MAX_BATCH_FILES,
   MINECRAFT_VERSIONS,
+  SUPPORTED_GAMES,
   analyzeArchive,
   applyClipboardTranslation,
   buildClipboardPayload,
@@ -148,6 +149,11 @@ document.querySelector("#app").innerHTML = `
         <span>${icon("shield", 17)} ${t("trustLocal")}</span>
         <span>${icon("jar", 17)} ${t("trustMinecraft")}</span>
       </div>
+      <div class="supported-games" aria-label="${t("supportedGames")}">
+        ${Object.values(SUPPORTED_GAMES)
+          .map((game) => `<span>${game.name}</span>`)
+          .join("")}
+      </div>
       <a
         class="oss-callout"
         href="https://github.com/IGNORANZ-PROJECT/BabelBreaker"
@@ -217,8 +223,10 @@ document.querySelector("#app").innerHTML = `
           <details class="advanced">
             <summary>${t("advanced")} <span>${t("optional")}</span></summary>
             <div class="advanced-body">
-              <label for="minecraft-version">${t("minecraftVersion")}</label>
-              <select id="minecraft-version"></select>
+              <div id="minecraft-settings">
+                <label for="minecraft-version">${t("minecraftVersion")}</label>
+                <select id="minecraft-version"></select>
+              </div>
               <label for="glossary">${t("glossary")} <span>${t("glossaryFormat")}</span></label>
               <textarea id="glossary" rows="4" placeholder="Gear=歯車&#10;Steam=蒸気"></textarea>
             </div>
@@ -318,7 +326,7 @@ document.querySelector("#app").innerHTML = `
             <span id="ready-copy">${t("readyCopy")}</span>
           </div>
           <button class="primary-button download-button" id="download-button" type="button">
-            ${icon("download", 18)} ${t("downloadPack")}
+            ${icon("download", 18)} <span id="download-label">${t("downloadPack")}</span>
           </button>
         </div>
       </section>
@@ -326,28 +334,28 @@ document.querySelector("#app").innerHTML = `
 
     <section class="guide section-wrap" id="guide">
       <div class="guide-heading">
-        <span class="step-label">${t("guideStep")}</span>
-        <h2>${t("guideTitle")}</h2>
-        <p>${t("guideCopy")}</p>
+        <span class="step-label" id="guide-step">${t("guideStep")}</span>
+        <h2 id="guide-title">${t("guideTitle")}</h2>
+        <p id="guide-copy">${t("guideCopy")}</p>
       </div>
       <div class="guide-steps">
         <article>
           <span class="guide-number">1</span>
-          <h3>${t("guide1Title")}</h3>
-          <p>${t("guide1Copy")}</p>
+          <h3 id="guide-1-title">${t("guide1Title")}</h3>
+          <p id="guide-1-copy">${t("guide1Copy")}</p>
         </article>
         <article>
           <span class="guide-number">2</span>
-          <h3>${t("guide2Title")}</h3>
-          <p>${t("guide2Copy")}</p>
+          <h3 id="guide-2-title">${t("guide2Title")}</h3>
+          <p id="guide-2-copy">${t("guide2Copy")}</p>
         </article>
         <article>
           <span class="guide-number">3</span>
-          <h3>${t("guide3Title")}</h3>
-          <p>${t("guide3Copy")}</p>
+          <h3 id="guide-3-title">${t("guide3Title")}</h3>
+          <p id="guide-3-copy">${t("guide3Copy")}</p>
         </article>
       </div>
-      <details class="troubleshooting">
+      <details class="troubleshooting" id="minecraft-troubleshooting">
         <summary>${icon("warning", 18)} ${t("troubleshooting")}</summary>
         <div>
           <p>${t("reloadResources").replace("F3 + T", "<kbd>F3</kbd> + <kbd>T</kbd>")}</p>
@@ -428,6 +436,7 @@ const elements = Object.fromEntries(
     "clipboard-mode-card",
     "local-availability",
     "minecraft-version",
+    "minecraft-settings",
     "glossary",
     "start-button",
     "start-label",
@@ -457,6 +466,17 @@ const elements = Object.fromEntries(
     "ready-title",
     "ready-copy",
     "download-button",
+    "download-label",
+    "guide-step",
+    "guide-title",
+    "guide-copy",
+    "guide-1-title",
+    "guide-1-copy",
+    "guide-2-title",
+    "guide-2-copy",
+    "guide-3-title",
+    "guide-3-copy",
+    "minecraft-troubleshooting",
   ].map((id) => [id, document.getElementById(id)]),
 );
 
@@ -487,11 +507,11 @@ function showNotice(message, type = "info") {
 function localizeError(error) {
   const message = String(error?.message || error || "");
   const mappings = [
-    [/Minecraft MODの \.jar/, "errorInvalidFile"],
+    [/MODの \.jar/, "errorInvalidFile"],
     [/512MB/, "errorTooLarge"],
-    [/JARを開けませんでした/, "errorOpenArchive"],
-    [/JAR内のファイル数/, "errorTooManyEntries"],
-    [/langファイルが見つかりません/, "errorNoLang"],
+    [/アーカイブを開けませんでした/, "errorOpenArchive"],
+    [/アーカイブ内のファイル数/, "errorTooManyEntries"],
+    [/対応する言語ファイルが見つかりません/, "errorNoLang"],
     [/langファイル.*サイズ|langファイルの合計サイズ/, "errorLangTooLarge"],
     [/読み込めるlangファイル/, "errorNoReadableLang"],
     [/安全でないファイルパス/, "errorUnsafePath"],
@@ -643,6 +663,24 @@ function updateProjectSummary() {
   updateStartLabel();
 }
 
+function renderGameGuide(game = "minecraft") {
+  const prefix = game === "minecraft" ? "guide" : `${game}Guide`;
+  for (const [id, suffix] of [
+    ["guide-step", "Step"],
+    ["guide-title", "Title"],
+    ["guide-copy", "Copy"],
+    ["guide-1-title", "1Title"],
+    ["guide-1-copy", "1Copy"],
+    ["guide-2-title", "2Title"],
+    ["guide-2-copy", "2Copy"],
+    ["guide-3-title", "3Title"],
+    ["guide-3-copy", "3Copy"],
+  ]) {
+    elements[id].textContent = t(`${prefix}${suffix}`);
+  }
+  elements["minecraft-troubleshooting"].hidden = game !== "minecraft";
+}
+
 function renderProject({ scroll = true } = {}) {
   if (!state.project) return;
   const { project } = state;
@@ -667,6 +705,7 @@ function renderProject({ scroll = true } = {}) {
     ? t("batchModName", { count: project.mods.length })
     : project.mod.name;
   elements["mod-tags"].innerHTML = [
+    SUPPORTED_GAMES[project.game || "minecraft"]?.name,
     project.mod.loader,
     project.mod.version !== "unknown" && project.mod.version !== "batch"
       ? `v${project.mod.version}`
@@ -681,7 +720,13 @@ function renderProject({ scroll = true } = {}) {
     .map((tag) => `<span>${escapeHtml(tag)}</span>`)
     .join("");
   updateProjectSummary();
-  elements["minecraft-version"].value = project.minecraftVersion;
+  const isMinecraft = (project.game || "minecraft") === "minecraft";
+  elements["minecraft-settings"].hidden = !isMinecraft;
+  if (isMinecraft) elements["minecraft-version"].value = project.minecraftVersion;
+  elements["download-label"].textContent = isMinecraft
+    ? t("downloadPack")
+    : t("downloadTranslationZip");
+  renderGameGuide(project.game || "minecraft");
   elements["review-panel"].hidden = true;
   elements["clipboard-panel"].hidden = true;
   elements["progress-panel"].hidden = true;
@@ -1032,7 +1077,9 @@ async function downloadPack() {
   setBusy(true);
   clearNotice();
   try {
-    state.project.minecraftVersion = elements["minecraft-version"].value;
+    if ((state.project.game || "minecraft") === "minecraft") {
+      state.project.minecraftVersion = elements["minecraft-version"].value;
+    }
     const { archive, filename } = await buildResourcePack(
       state.project,
       state.project.minecraftVersion,
@@ -1045,7 +1092,15 @@ async function downloadPack() {
     anchor.click();
     anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
-    showNotice(t("downloadSuccess", { filename }), "success");
+    showNotice(
+      t(
+        (state.project.game || "minecraft") === "minecraft"
+          ? "downloadSuccess"
+          : "downloadTranslationSuccess",
+        { filename },
+      ),
+      "success",
+    );
     document.querySelector("#guide").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
     showNotice(localizeError(error), "error");
@@ -1068,6 +1123,9 @@ function resetWorkspace() {
   elements["translation-file"].value = "";
   clearNotice();
   if (state.translatorStatus.supported) selectMode("local");
+  elements["minecraft-settings"].hidden = false;
+  elements["download-label"].textContent = t("downloadPack");
+  renderGameGuide();
   updateAvailability();
   document.querySelector("#home").scrollIntoView({ behavior: "smooth" });
 }
