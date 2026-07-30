@@ -162,7 +162,7 @@ test("JAR analysis tracks different source languages per namespace", async () =>
   );
 });
 
-test("Factorio locale CFG is auto-detected and exported as a merge-ready ZIP", async () => {
+test("Factorio locale CFG is exported inside a complete translated mod ZIP", async () => {
   const project = await analyzeArchive(
     await makeArchiveFile("example-factorio_1.0.0.zip", {
       "example-factorio_1.0.0/info.json": JSON.stringify({
@@ -190,10 +190,13 @@ test("Factorio locale CFG is auto-detected and exported as a merge-ready ZIP", a
     .file("example-factorio_1.0.0/locale/ja/base.cfg")
     .async("string");
   assert.match(output, /\[item-name\]\nexample-item=訳:Example item/);
-  assert.ok(zip.file("_BABEL_BREAKER_README.txt"));
+  assert.ok(zip.file("example-factorio_1.0.0/info.json"));
+  assert.ok(
+    zip.file("example-factorio_1.0.0/_BABEL_BREAKER_README.txt"),
+  );
 });
 
-test("Stardew Valley Content Patcher i18n JSON is auto-detected", async () => {
+test("Stardew Valley i18n is exported inside a complete translated mod ZIP", async () => {
   const project = await analyzeArchive(
     await makeArchiveFile("ExampleStardew.zip", {
       "ExampleStardew/manifest.json": JSON.stringify({
@@ -218,9 +221,11 @@ test("Stardew Valley Content Patcher i18n JSON is auto-detected", async () => {
     JSON.parse(await zip.file("ExampleStardew/i18n/de.json").async("string")),
     { greeting: "Willkommen auf dem Bauernhof!" },
   );
+  assert.ok(zip.file("ExampleStardew/manifest.json"));
+  assert.ok(zip.file("ExampleStardew/i18n/default.json"));
 });
 
-test("RimWorld Keyed and DefInjected XML are auto-detected", async () => {
+test("RimWorld language XML is exported as a standalone translation mod", async () => {
   const project = await analyzeArchive(
     await makeArchiveFile("ExampleRimWorld.zip", {
       "ExampleRimWorld/About/About.xml":
@@ -241,15 +246,20 @@ test("RimWorld Keyed and DefInjected XML are auto-detected", async () => {
   }
   const { archive } = await buildResourcePack(project, undefined, "nodebuffer");
   const zip = await JSZip.loadAsync(archive);
+  const root = "Example_RimWorld_Mod_Japanese_Translation";
   assert.ok(
-    zip.file("ExampleRimWorld/Languages/Japanese/Keyed/UI.xml"),
+    zip.file(`${root}/Languages/Japanese/Keyed/UI.xml`),
   );
   assert.match(
     await zip
-      .file("ExampleRimWorld/Languages/Japanese/DefInjected/ThingDef/Items.xml")
+      .file(`${root}/Languages/Japanese/DefInjected/ThingDef/Items.xml`)
       .async("string"),
     /<ExampleItem\.label>訳:example item<\/ExampleItem\.label>/,
   );
+  const about = await zip.file(`${root}/About/About.xml`).async("string");
+  assert.match(about, /<packageId>example\.rimworld\.babelbreaker\.japanese<\/packageId>/);
+  assert.match(about, /<loadAfter>[\s\S]*<li>example\.rimworld<\/li>/);
+  assert.equal(zip.file("ExampleRimWorld/About/About.xml"), null);
 });
 
 test("each supported game uses its native target locale name", () => {
@@ -257,6 +267,60 @@ test("each supported game uses its native target locale name", () => {
   assert.equal(getGameTargetLocale("factorio", "zh-Hans"), "zh-CN");
   assert.equal(getGameTargetLocale("stardew", "pt"), "pt");
   assert.equal(getGameTargetLocale("rimworld", "ja"), "Japanese");
+});
+
+test("multiple non-Minecraft mods export as one bundle of installable archives", async () => {
+  const first = await analyzeArchive(
+    await makeArchiveFile("mod-one_1.0.0.zip", {
+      "mod-one_1.0.0/info.json": JSON.stringify({
+        name: "mod-one",
+        title: "Mod One",
+        version: "1.0.0",
+      }),
+      "mod-one_1.0.0/locale/en/base.cfg":
+        "[item-name]\nshared=First item\n",
+    }),
+  );
+  const second = await analyzeArchive(
+    await makeArchiveFile("mod-two_1.0.0.zip", {
+      "mod-two_1.0.0/info.json": JSON.stringify({
+        name: "mod-two",
+        title: "Mod Two",
+        version: "1.0.0",
+      }),
+      "mod-two_1.0.0/locale/en/base.cfg":
+        "[item-name]\nshared=Second item\n",
+    }),
+  );
+  const project = combineProjects([first, second]);
+  assert.equal(project.entries.length, 2);
+  project.entries.forEach((entry) => {
+    entry.translation = `訳:${entry.source}`;
+    entry.status = "edited";
+  });
+
+  const { archive, filename } = await buildResourcePack(
+    project,
+    undefined,
+    "nodebuffer",
+  );
+  assert.equal(filename, "2-mods_factorio_ja.zip");
+  const bundle = await JSZip.loadAsync(archive);
+  for (const [modId, expected] of [
+    ["mod-one", "訳:First item"],
+    ["mod-two", "訳:Second item"],
+  ]) {
+    const child = await JSZip.loadAsync(
+      await bundle.file(`${modId}_1.0.0.zip`).async("uint8array"),
+    );
+    assert.ok(child.file(`${modId}_1.0.0/info.json`));
+    assert.match(
+      await child
+        .file(`${modId}_1.0.0/locale/ja/base.cfg`)
+        .async("string"),
+      new RegExp(`shared=${expected}`),
+    );
+  }
 });
 
 test("multiple MOD projects combine into one installable resource pack", async () => {

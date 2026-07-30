@@ -567,6 +567,7 @@ async function analyzeGameArchive(
   file,
   game,
   targetLanguage,
+  sourceZip,
 ) {
   const language = getTargetLanguage(targetLanguage);
   const targetLocale = getGameTargetLocale(game, language.id);
@@ -762,6 +763,7 @@ async function analyzeGameArchive(
     namespaces,
     entries,
     warnings,
+    sourceZip,
     createdAt: new Date().toISOString(),
   };
 }
@@ -847,6 +849,7 @@ export async function analyzeArchive(
         file,
         detectedGame,
         language.id,
+        zip,
       );
       if (project) return project;
     }
@@ -1041,7 +1044,7 @@ export function combineProjects(projects) {
   const namespaceMap = new Map();
   const entryMap = new Map();
 
-  for (const project of validProjects) {
+  for (const [projectIndex, project] of validProjects.entries()) {
     for (const warning of project.warnings || []) {
       warnings.push(`${project.fileName}: ${warning}`);
     }
@@ -1090,7 +1093,10 @@ export function combineProjects(projects) {
       for (const sourceId of namespace.entryIds) {
         const sourceEntry = sourceEntries.get(sourceId);
         if (!sourceEntry) continue;
-        const collisionKey = `${namespace.namespace}\u0000${sourceEntry.key}`;
+        const collisionKey =
+          game === "minecraft"
+            ? `${namespace.namespace}\u0000${sourceEntry.key}`
+            : `${projectIndex}\u0000${namespace.namespace}\u0000${sourceEntry.key}`;
         const existingEntry = entryMap.get(collisionKey);
         if (existingEntry) {
           if (existingEntry.source === sourceEntry.source) {
@@ -1117,6 +1123,8 @@ export function combineProjects(projects) {
           modId: project.mod.id,
           modName: project.mod.name,
           sourceFileName: project.fileName,
+          sourceProjectIndex: projectIndex,
+          sourceEntryId: sourceEntry.id,
         };
         entries.push(entry);
         entryMap.set(collisionKey, entry);
@@ -1185,6 +1193,7 @@ export function combineProjects(projects) {
     namespaces,
     entries,
     warnings,
+    sourceProjects: validProjects,
     createdAt: new Date().toISOString(),
     isBatch: true,
   };
@@ -1698,53 +1707,251 @@ export function sanitizeFileName(value) {
   return cleaned.slice(0, 120) || "Minecraft_MOD";
 }
 
+function buildTranslatedNamespace(project, namespace) {
+  const entriesById = new Map(project.entries.map((entry) => [entry.id, entry]));
+  const translated = { ...namespace.preserved };
+  for (const id of namespace.entryIds) {
+    const entry = entriesById.get(id);
+    if (entry && shouldIncludeEntryInOutput(entry)) {
+      translated[entry.key] = entry.translation;
+    } else if (entry) {
+      delete translated[entry.key];
+    }
+  }
+  return translated;
+}
+
+function stringifyTranslatedNamespace(namespace, translated) {
+  if (namespace.format === "factorio") {
+    return stringifyFactorioLocale(translated);
+  }
+  if (namespace.format === "rimworld") {
+    return stringifyRimWorldLanguageXml(translated);
+  }
+  return `${JSON.stringify(translated, null, 2)}\n`;
+}
+
+function archiveGenerationOptions(type) {
+  return {
+    type,
+    compression: "DEFLATE",
+    compressionOptions: { level: 6 },
+    platform: "UNIX",
+  };
+}
+
+function fullModReadme(project, stats) {
+  return [
+    `${APP_NAME} browser edition`,
+    `game=${SUPPORTED_GAMES[project.game].name}`,
+    `mod=${project.mod.name}`,
+    `target_locale=${project.targetLocale}`,
+    `output_entries=${stats.output}`,
+    `omitted_entries=${stats.omitted}`,
+    `generated_at=${new Date().toISOString()}`,
+    "privacy=Created entirely in this browser",
+    "",
+    "This archive is a translated copy of the selected mod.",
+    "Back up and remove or disable the original copy before installing this one.",
+    "Do not publish or redistribute this archive unless the original mod license or author permits it.",
+    "",
+    "このアーカイブは、選択したMODからブラウザ内で作成した翻訳済みコピーです。",
+    "導入前に元のMODをバックアップし、元のコピーを削除または無効化してください。",
+    "元MODのライセンスまたは作者が許可していない限り、このアーカイブを再配布しないでください。",
+    "",
+  ].join("\n");
+}
+
+function rimWorldPackageId(project) {
+  const original = String(project.mod.id || "unknown.mod")
+    .toLowerCase()
+    .replace(/[^a-z0-9.]+/g, ".")
+    .replace(/^\.+|\.+$/g, "") || "unknown.mod";
+  const locale = String(project.targetLocale || "translation")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+  return `${original}.babelbreaker.${locale || "translation"}`;
+}
+
+function rimWorldTranslationRoot(project) {
+  return `${sanitizeFileName(project.mod.name)}_${sanitizeFileName(project.targetLocale)}_Translation`;
+}
+
+function rimWorldAboutXml(project) {
+  const language = getTargetLanguage(project.targetLanguage);
+  const originalId = String(project.mod.id || "unknown.mod");
+  const originalName = String(project.mod.name || "Unknown Mod");
+  const translatedName = `${originalName} — ${language.nativeName} Translation`;
+  return [
+    '<?xml version="1.0" encoding="utf-8"?>',
+    "<ModMetaData>",
+    `  <name>${escapeXmlText(translatedName)}</name>`,
+    "  <author>Babel Breaker user-generated</author>",
+    `  <packageId>${escapeXmlText(rimWorldPackageId(project))}</packageId>`,
+    `  <description>${escapeXmlText(`A ${language.nativeName} translation for ${originalName}, generated locally with Babel Breaker. The original mod is required.`)}</description>`,
+    "  <modDependencies>",
+    "    <li>",
+    `      <packageId>${escapeXmlText(originalId)}</packageId>`,
+    `      <displayName>${escapeXmlText(originalName)}</displayName>`,
+    "    </li>",
+    "  </modDependencies>",
+    "  <loadAfter>",
+    `    <li>${escapeXmlText(originalId)}</li>`,
+    "  </loadAfter>",
+    "</ModMetaData>",
+    "",
+  ].join("\n");
+}
+
+async function buildSingleGameArchive(project, outputType) {
+  const stats = getProjectStats(project);
+  const game = project.game;
+
+  if (game === "factorio" || game === "stardew") {
+    if (!project.sourceZip) {
+      throw new Error("元のMODアーカイブを再読み込みしてください。");
+    }
+    const zip = project.sourceZip;
+    for (const namespace of project.namespaces) {
+      const translated = buildTranslatedNamespace(project, namespace);
+      zip.file(
+        namespace.outputPath,
+        stringifyTranslatedNamespace(namespace, translated),
+      );
+    }
+    const readmePath = `${project.mod.root || ""}_BABEL_BREAKER_README.txt`;
+    zip.file(readmePath, fullModReadme(project, stats));
+    const archive = await zip.generateAsync(
+      archiveGenerationOptions(outputType),
+    );
+    const filename =
+      game === "factorio"
+        ? `${sanitizeFileName(project.mod.id)}_${sanitizeFileName(project.mod.version)}.zip`
+        : `${sanitizeFileName(project.mod.name)}_${sanitizeFileName(project.targetLocale)}_translated.zip`;
+    return { archive, filename };
+  }
+
+  if (game === "rimworld") {
+    const zip = new JSZip();
+    const root = rimWorldTranslationRoot(project);
+    zip.file(`${root}/About/About.xml`, rimWorldAboutXml(project));
+    for (const namespace of project.namespaces) {
+      const relativePath = namespace.outputPath.match(
+        /(?:^|\/)languages\/[^/]+\/(.+)$/i,
+      )?.[1];
+      if (!relativePath) continue;
+      const translated = buildTranslatedNamespace(project, namespace);
+      zip.file(
+        `${root}/Languages/${project.targetLocale}/${relativePath}`,
+        stringifyTranslatedNamespace(namespace, translated),
+      );
+    }
+    zip.file(
+      `${root}/README.txt`,
+      [
+        `${APP_NAME} browser edition`,
+        `translation_for=${project.mod.name}`,
+        `required_package_id=${project.mod.id}`,
+        `target_locale=${project.targetLocale}`,
+        `output_entries=${stats.output}`,
+        `omitted_entries=${stats.omitted}`,
+        `generated_at=${new Date().toISOString()}`,
+        "privacy=Created entirely in this browser",
+        "",
+        "This is a standalone RimWorld translation mod. It does not contain the original mod.",
+        "Extract it into RimWorld/Mods, enable both mods, and load this translation after the original.",
+        "",
+        "これは元MODを含まない、独立したRimWorld翻訳MODです。",
+        "RimWorld/Modsへ展開し、元MODと翻訳MODの両方を有効にして、翻訳MODを元MODより後に読み込んでください。",
+        "",
+      ].join("\n"),
+    );
+    const archive = await zip.generateAsync(
+      archiveGenerationOptions(outputType),
+    );
+    return {
+      archive,
+      filename: `${root}.zip`,
+    };
+  }
+
+  throw new Error(`未対応の出力形式です: ${game}`);
+}
+
+function applyBatchTranslations(project, sourceProject, sourceProjectIndex) {
+  const bySourceEntry = new Map(
+    project.entries
+      .filter((entry) => entry.sourceProjectIndex === sourceProjectIndex)
+      .map((entry) => [String(entry.sourceEntryId), entry]),
+  );
+  return {
+    ...sourceProject,
+    entries: sourceProject.entries.map((entry) => {
+      const combined = bySourceEntry.get(String(entry.id));
+      if (!combined) return { ...entry };
+      return {
+        ...entry,
+        translation: combined.translation,
+        status: combined.status,
+        ignored: combined.ignored,
+        warning: combined.warning,
+      };
+    }),
+  };
+}
+
+async function buildGameBatchArchive(project, outputType) {
+  if (!project.sourceProjects?.length) {
+    throw new Error("一括出力には元のMODアーカイブが必要です。");
+  }
+  const zip = new JSZip();
+  for (const [index, sourceProject] of project.sourceProjects.entries()) {
+    const translatedProject = applyBatchTranslations(
+      project,
+      sourceProject,
+      index,
+    );
+    const result = await buildSingleGameArchive(
+      translatedProject,
+      "uint8array",
+    );
+    zip.file(result.filename, result.archive);
+  }
+  zip.file(
+    "_BABEL_BREAKER_README.txt",
+    [
+      `${APP_NAME} browser edition`,
+      `game=${SUPPORTED_GAMES[project.game].name}`,
+      `mods=${project.sourceProjects.length}`,
+      `target_locale=${project.targetLocale}`,
+      `generated_at=${new Date().toISOString()}`,
+      "",
+      "This bundle contains one ready-to-install archive for each selected mod.",
+      "Read the installation guide on Babel Breaker before replacing or enabling mods.",
+      "Do not redistribute translated copies of original mods without permission.",
+      "",
+      "選択したMODごとの導入用アーカイブをまとめています。",
+      "MODの入れ替えや有効化の前に、Babel Breakerの導入ガイドを確認してください。",
+      "元MODを含む翻訳済みコピーは、許可なく再配布しないでください。",
+      "",
+    ].join("\n"),
+  );
+  const archive = await zip.generateAsync(
+    archiveGenerationOptions(outputType),
+  );
+  return {
+    archive,
+    filename: `${project.sourceProjects.length}-mods_${project.game}_${sanitizeFileName(project.targetLocale)}.zip`,
+  };
+}
+
 export async function buildResourcePack(project, versionId = project.minecraftVersion, outputType = "blob") {
   const stats = getProjectStats(project);
   const game = project.game || "minecraft";
   if (game !== "minecraft") {
-    const zip = new JSZip();
-    const entriesById = new Map(project.entries.map((entry) => [entry.id, entry]));
-    for (const namespace of project.namespaces) {
-      const translated = { ...namespace.preserved };
-      for (const id of namespace.entryIds) {
-        const entry = entriesById.get(id);
-        if (entry && shouldIncludeEntryInOutput(entry)) translated[entry.key] = entry.translation;
-        else if (entry) delete translated[entry.key];
-      }
-      const contents =
-        namespace.format === "factorio"
-          ? stringifyFactorioLocale(translated)
-          : namespace.format === "rimworld"
-            ? stringifyRimWorldLanguageXml(translated)
-            : `${JSON.stringify(translated, null, 2)}\n`;
-      zip.file(namespace.outputPath, contents);
-    }
-    zip.file(
-      "_BABEL_BREAKER_README.txt",
-      [
-        `${APP_NAME} browser edition`,
-        `game=${SUPPORTED_GAMES[game].name}`,
-        `mod=${project.mod.name}`,
-        `target_locale=${project.targetLocale}`,
-        `output_entries=${stats.output}`,
-        `omitted_entries=${stats.omitted}`,
-        "",
-        "This ZIP contains only generated translation files.",
-        "Merge its folders into the original mod folder. Keep a backup of the original mod.",
-        "The source mod was processed locally and is not included.",
-        "",
-      ].join("\n"),
-    );
-    const archive = await zip.generateAsync({
-      type: outputType,
-      compression: "DEFLATE",
-      compressionOptions: { level: 6 },
-      platform: "UNIX",
-    });
-    return {
-      archive,
-      filename: `${sanitizeFileName(project.mod.name)}_${project.targetLocale}_translation.zip`,
-    };
+    return project.isBatch
+      ? buildGameBatchArchive(project, outputType)
+      : buildSingleGameArchive(project, outputType);
   }
   const version = getMinecraftVersion(versionId);
   const zip = new JSZip();
@@ -1792,12 +1999,7 @@ export async function buildResourcePack(project, versionId = project.minecraftVe
     ].join("\n"),
   );
 
-  const archive = await zip.generateAsync({
-    type: outputType,
-    compression: "DEFLATE",
-    compressionOptions: { level: 6 },
-    platform: "UNIX",
-  });
+  const archive = await zip.generateAsync(archiveGenerationOptions(outputType));
   const filename = `${sanitizeFileName(project.mod.name)}_${sanitizeFileName(project.mod.version)}_${project.targetLocale}.zip`;
   return { archive, filename };
 }
