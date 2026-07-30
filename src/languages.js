@@ -2,6 +2,15 @@ export const DEFAULT_TARGET_LANGUAGE = "ja";
 
 export const TARGET_LANGUAGES = [
   {
+    id: "en",
+    locale: "en-US",
+    minecraftLocale: "en_us",
+    nativeName: "English",
+    englishName: "English",
+    modelSizeMb: 0,
+    reverseModelSizeMb: 0,
+  },
+  {
     id: "ja",
     locale: "ja-JP",
     minecraftLocale: "ja_jp",
@@ -93,17 +102,7 @@ export const TARGET_LANGUAGES = [
   },
 ];
 
-export const SOURCE_LANGUAGES = [
-  {
-    id: "en",
-    locale: "en-US",
-    minecraftLocale: "en_us",
-    nativeName: "English",
-    englishName: "English",
-    reverseModelSizeMb: 0,
-  },
-  ...TARGET_LANGUAGES,
-];
+export const SOURCE_LANGUAGES = TARGET_LANGUAGES;
 
 export function getTargetLanguage(id = DEFAULT_TARGET_LANGUAGE) {
   return (

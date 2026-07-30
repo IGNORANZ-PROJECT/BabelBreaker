@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { File } from "node:buffer";
 import test from "node:test";
 import JSZip from "jszip";
+import { NBT_TAG, parseNbt, writeNbt } from "../src/nbt.js";
 
 import {
   analyzeArchive,
@@ -62,13 +63,23 @@ test("legacy .lang parser preserves values after the first separator", () => {
 });
 
 test("placeholder validation protects Minecraft formatting", () => {
-  assert.deepEqual(extractPlaceholderTokens("Energy: %1$s / %s §a{0}\n"), [
+  assert.deepEqual(
+    extractPlaceholderTokens(
+      "Energy: %1$s / %s §a{0} {player} $(bold)$() $(l:mod:entry)Guide$(/l)\n",
+    ),
+    [
     "\n",
+    "$()",
+    "$(/l)",
+    "$(bold)",
+    "$(l:mod:entry)",
     "%1$s",
     "%s",
     "{0}",
+    "{player}",
     "§a",
-  ]);
+    ],
+  );
   assert.equal(placeholdersMatch("Hello %s", "こんにちは %s"), true);
   assert.equal(placeholdersMatch("Hello %s", "こんにちは"), false);
 });
@@ -100,6 +111,383 @@ test("JAR analysis discovers metadata, multiple namespaces, and existing Japanes
     project.entries.find((entry) => entry.key === "item.example").translation,
     "サンプルアイテム",
   );
+});
+
+test("Patchouli books are extracted and exported as locale resource files", async () => {
+  const file = await makeModFile({
+    files: {
+      "assets/example/patchouli_books/guide/en_us/categories/basics.json":
+        JSON.stringify({
+          name: "Basics",
+          description: "Learn how the machines work.",
+          icon: "minecraft:book",
+        }),
+      "assets/example/patchouli_books/guide/en_us/entries/first_steps.json":
+        JSON.stringify({
+          name: "First Steps",
+          icon: "minecraft:crafting_table",
+          category: "example:basics",
+          pages: [
+            {
+              type: "patchouli:text",
+              text: "Build the $(bold)Arcane Forge$() first.",
+            },
+          ],
+        }),
+      "assets/example/patchouli_books/guide/ja_jp/entries/first_steps.json":
+        JSON.stringify({
+          name: "最初の一歩",
+        }),
+    },
+  });
+
+  const project = await analyzeArchive(file);
+  const patchouliEntries = project.entries.filter(
+    (entry) => entry.contentKind === "patchouli",
+  );
+  assert.equal(patchouliEntries.length, 4);
+  assert.ok(project.contentKinds.includes("patchouli"));
+  assert.equal(project.requiresInstanceInstall, false);
+  assert.equal(
+    patchouliEntries.find((entry) => entry.source === "First Steps")
+      .translation,
+    "最初の一歩",
+  );
+
+  const translations = new Map([
+    ["Basics", "基本"],
+    ["Learn how the machines work.", "機械の仕組みを学びます。"],
+    [
+      "Build the $(bold)Arcane Forge$() first.",
+      "最初に$(bold)秘術の鍛冶台$()を作ります。",
+    ],
+  ]);
+  for (const entry of patchouliEntries) {
+    if (!translations.has(entry.source)) continue;
+    entry.translation = translations.get(entry.source);
+    entry.status = "edited";
+  }
+
+  const { archive, filename } = await buildResourcePack(
+    project,
+    "1.21",
+    "nodebuffer",
+  );
+  assert.doesNotMatch(filename, /translation_bundle/);
+  const zip = await JSZip.loadAsync(archive);
+  const category = JSON.parse(
+    await zip
+      .file(
+        "assets/example/patchouli_books/guide/ja_jp/categories/basics.json",
+      )
+      .async("string"),
+  );
+  assert.equal(category.name, "基本");
+  assert.equal(category.description, "機械の仕組みを学びます。");
+  assert.equal(category.icon, "minecraft:book");
+  const entry = JSON.parse(
+    await zip
+      .file(
+        "assets/example/patchouli_books/guide/ja_jp/entries/first_steps.json",
+      )
+      .async("string"),
+  );
+  assert.equal(entry.name, "最初の一歩");
+  assert.equal(
+    entry.pages[0].text,
+    "最初に$(bold)秘術の鍛冶台$()を作ります。",
+  );
+});
+
+test("modpack Patchouli books are exported to their instance path", async () => {
+  const file = await makeArchiveFile("GuidePack.zip", {
+    "overrides/patchouli_books/pack_guide/book.json": JSON.stringify({
+      name: "Pack Guide",
+      landing_text: "Welcome",
+    }),
+    "overrides/patchouli_books/pack_guide/en_us/entries/start.json":
+      JSON.stringify({
+        name: "Welcome",
+        pages: [{ type: "patchouli:text", text: "Read this first." }],
+      }),
+  });
+  const project = await analyzeArchive(file);
+  assert.equal(project.requiresInstanceInstall, true);
+  assert.equal(project.entries.length, 4);
+  project.entries.forEach((entry) => {
+    entry.translation = new Map([
+      ["Pack Guide", "パックガイド"],
+      ["Welcome", "ようこそ"],
+      ["Read this first.", "最初にお読みください。"],
+    ]).get(entry.source);
+    entry.status = "edited";
+  });
+  const { archive } = await buildResourcePack(
+    project,
+    "1.21",
+    "nodebuffer",
+  );
+  const bundle = await JSZip.loadAsync(archive);
+  const output = JSON.parse(
+    await bundle
+      .file(
+        "instance/patchouli_books/pack_guide/ja_jp/entries/start.json",
+      )
+      .async("string"),
+  );
+  assert.equal(output.name, "ようこそ");
+  assert.equal(output.pages[0].text, "最初にお読みください。");
+  const book = JSON.parse(
+    await bundle
+      .file("instance/patchouli_books/pack_guide/book.json")
+      .async("string"),
+  );
+  assert.equal(book.name, "パックガイド");
+  assert.equal(book.landing_text, "ようこそ");
+});
+
+test("FTB Quests locale SNBT is exported as an instance translation bundle", async () => {
+  const file = await makeArchiveFile("ExampleModpack.zip", {
+    "assets/example/lang/en_us.json": JSON.stringify({
+      "item.example.quest_book": "Quest Book",
+    }),
+    "overrides/config/ftbquests/quests/lang/en_us.snbt": `{
+  "quest.start.title": "Getting Started"
+  "quest.start.description": [
+    "Welcome, {player}!"
+    "[{\\"text\\":\\"Click here\\",\\"color\\":\\"green\\"}]"
+  ]
+}`,
+    "overrides/config/ftbquests/quests/lang/ja_jp.snbt": `{
+  "quest.start.title": "はじめに"
+}`,
+  });
+  const project = await analyzeArchive(file);
+  assert.equal(project.game, "minecraft");
+  assert.equal(project.requiresInstanceInstall, true);
+  assert.ok(project.contentKinds.includes("ftbquests"));
+  assert.equal(project.entries.length, 4);
+  assert.equal(
+    project.entries.find((entry) => entry.source === "Getting Started")
+      .translation,
+    "はじめに",
+  );
+
+  for (const entry of project.entries) {
+    if (entry.source === "Welcome, {player}!") {
+      entry.translation = "ようこそ、{player}！";
+      entry.status = "edited";
+    }
+    if (entry.source === "Click here") {
+      entry.translation = "ここをクリック";
+      entry.status = "edited";
+    }
+    if (entry.source === "Quest Book") {
+      entry.translation = "クエストブック";
+      entry.status = "edited";
+    }
+  }
+
+  const { archive, filename } = await buildResourcePack(
+    project,
+    "1.21",
+    "nodebuffer",
+  );
+  assert.match(filename, /translation_bundle\.zip$/);
+  const bundle = await JSZip.loadAsync(archive);
+  const translated = await bundle
+    .file("instance/config/ftbquests/quests/lang/ja_jp.snbt")
+    .async("string");
+  assert.match(translated, /"quest\.start\.title": "はじめに"/);
+  assert.match(translated, /"ようこそ、\{player\}！"/);
+  assert.match(translated, /ここをクリック/);
+  assert.match(translated, /\\"color\\":\\"green\\"/);
+  const resourcePackPath = Object.keys(bundle.files).find((path) =>
+    path.endsWith("_resourcepack.zip"),
+  );
+  assert.ok(resourcePackPath);
+  const resourcePack = await JSZip.loadAsync(
+    await bundle.file(resourcePackPath).async("uint8array"),
+  );
+  assert.deepEqual(
+    JSON.parse(
+      await resourcePack
+        .file("assets/example/lang/ja_jp.json")
+        .async("string"),
+    ),
+    { "item.example.quest_book": "クエストブック" },
+  );
+  assert.ok(bundle.file("README.txt"));
+});
+
+test("legacy FTB Quests translates visible fields and preserves commands", async () => {
+  const file = await makeArchiveFile("LegacyFTBPack.zip", {
+    "overrides/config/ftbquests/quests/chapters/start.snbt": `{
+  title: "First Chapter"
+  quests: [{
+    title: "Gather Stone"
+    description: ["Collect stone to continue."]
+    command: "/give @p minecraft:stone"
+    id: "1234ABCD"
+  }]
+}`,
+  });
+  const project = await analyzeArchive(file);
+  assert.equal(project.entries.length, 3);
+  assert.ok(
+    project.entries.every((entry) => entry.contentKind === "ftbquests"),
+  );
+  const translations = new Map([
+    ["First Chapter", "最初の章"],
+    ["Gather Stone", "石を集める"],
+    ["Collect stone to continue.", "石を集めて先へ進みます。"],
+  ]);
+  project.entries.forEach((entry) => {
+    entry.translation = translations.get(entry.source);
+    entry.status = "edited";
+  });
+  const { archive } = await buildResourcePack(
+    project,
+    "1.20",
+    "nodebuffer",
+  );
+  const bundle = await JSZip.loadAsync(archive);
+  const output = await bundle
+    .file("instance/config/ftbquests/quests/chapters/start.snbt")
+    .async("string");
+  assert.match(output, /title: "最初の章"/);
+  assert.match(output, /title: "石を集める"/);
+  assert.match(output, /description: \["石を集めて先へ進みます。"\]/);
+  assert.match(output, /command: "\/give @p minecraft:stone"/);
+  assert.match(output, /id: "1234ABCD"/);
+});
+
+test("binary FTB Quests NBT translates visible strings without changing quest data", async () => {
+  const binaryQuest = writeNbt({
+    compression: "gzip",
+    root: {
+      type: NBT_TAG.COMPOUND,
+      name: "",
+      value: [
+        { type: NBT_TAG.STRING, name: "title", value: "Binary Quest" },
+        {
+          type: NBT_TAG.LIST,
+          name: "description",
+          value: {
+            elementType: NBT_TAG.STRING,
+            items: [
+              "Collect ten stones.",
+              '{"text":"Click here","color":"green","clickEvent":{"action":"run_command","value":"/say quest"}}',
+            ],
+          },
+        },
+        {
+          type: NBT_TAG.STRING,
+          name: "command",
+          value: "/give @p minecraft:stone",
+        },
+        {
+          type: NBT_TAG.STRING,
+          name: "name",
+          value: "quest.binary.internal_name",
+        },
+        { type: NBT_TAG.LONG, name: "id", value: 1234567890123456789n },
+        {
+          type: NBT_TAG.INT_ARRAY,
+          name: "progress",
+          value: new Int32Array([1, 2, 3]),
+        },
+      ],
+    },
+  });
+  const file = await makeArchiveFile("BinaryFTBPack.zip", {
+    "overrides/config/ftbquests/quests/chapters/start.nbt": binaryQuest,
+  });
+
+  const project = await analyzeArchive(file);
+  assert.equal(project.entries.length, 3);
+  assert.ok(
+    project.entries.every(
+      (entry) => entry.contentFormat === "ftbquests-binary-nbt",
+    ),
+  );
+  const translations = new Map([
+    ["Binary Quest", "バイナリクエスト"],
+    ["Collect ten stones.", "石を10個集めます。"],
+    ["Click here", "ここをクリック"],
+  ]);
+  project.entries.forEach((entry) => {
+    entry.translation = translations.get(entry.source);
+    entry.status = "edited";
+  });
+
+  const { archive } = await buildResourcePack(
+    project,
+    "1.20",
+    "nodebuffer",
+  );
+  const bundle = await JSZip.loadAsync(archive);
+  const outputBytes = await bundle
+    .file("instance/config/ftbquests/quests/chapters/start.nbt")
+    .async("uint8array");
+  const output = parseNbt(outputBytes);
+  assert.equal(output.compression, "gzip");
+  const tags = new Map(output.root.value.map((tag) => [tag.name, tag]));
+  assert.equal(tags.get("title").value, "バイナリクエスト");
+  assert.equal(tags.get("description").value.items[0], "石を10個集めます。");
+  assert.deepEqual(JSON.parse(tags.get("description").value.items[1]), {
+    text: "ここをクリック",
+    color: "green",
+    clickEvent: { action: "run_command", value: "/say quest" },
+  });
+  assert.equal(tags.get("command").value, "/give @p minecraft:stone");
+  assert.equal(tags.get("name").value, "quest.binary.internal_name");
+  assert.equal(tags.get("id").value, 1234567890123456789n);
+  assert.deepEqual([...tags.get("progress").value], [1, 2, 3]);
+});
+
+test("legacy Better Questing JSON is translated without changing quest data", async () => {
+  const file = await makeArchiveFile("LegacyPack.zip", {
+    "overrides/config/betterquesting/DefaultQuests.json": JSON.stringify({
+      "questDatabase:9": {
+        "0:10": {
+          "properties:10": {
+            "betterquesting:10": {
+              "name:8": "A New Beginning",
+              "desc:8": "Collect ten stones.",
+              "questID:3": 42,
+            },
+          },
+        },
+      },
+    }),
+  });
+  const project = await analyzeArchive(file);
+  assert.ok(project.contentKinds.includes("betterquesting"));
+  assert.equal(project.entries.length, 2);
+  for (const entry of project.entries) {
+    entry.translation =
+      entry.source === "A New Beginning" ? "新たな始まり" : "石を10個集めます。";
+    entry.status = "edited";
+  }
+
+  const { archive } = await buildResourcePack(
+    project,
+    "1.12",
+    "nodebuffer",
+  );
+  const bundle = await JSZip.loadAsync(archive);
+  const output = JSON.parse(
+    await bundle
+      .file("instance/config/betterquesting/DefaultQuests.json")
+      .async("string"),
+  );
+  const quest = output["questDatabase:9"]["0:10"]["properties:10"][
+    "betterquesting:10"
+  ];
+  assert.equal(quest["name:8"], "新たな始まり");
+  assert.equal(quest["desc:8"], "石を10個集めます。");
+  assert.equal(quest["questID:3"], 42);
 });
 
 test("JAR analysis preserves the selected target locale instead of Japanese", async () => {
@@ -264,6 +652,9 @@ test("RimWorld language XML is exported as a standalone translation mod", async 
 
 test("each supported game uses its native target locale name", () => {
   assert.equal(getGameTargetLocale("minecraft", "ja"), "ja_jp");
+  assert.equal(getGameTargetLocale("factorio", "en"), "en");
+  assert.equal(getGameTargetLocale("stardew", "en"), "default");
+  assert.equal(getGameTargetLocale("rimworld", "en"), "English");
   assert.equal(getGameTargetLocale("factorio", "zh-Hans"), "zh-CN");
   assert.equal(getGameTargetLocale("stardew", "pt"), "pt");
   assert.equal(getGameTargetLocale("rimworld", "ja"), "Japanese");
@@ -599,6 +990,33 @@ test("local translation selects a translator for each detected source language",
   assert.equal(project.entries[0].translation, "エネルギー: %s");
   assert.equal(project.entries[1].translation, "エネルギー");
   assert.deepEqual(new Set(destroyed), new Set(["de", "en", "es"]));
+});
+
+test("local translation uses the direct source-to-English model", async () => {
+  const project = await analyzeArchive(
+    await makeModFile({
+      files: {
+        "assets/example/lang/de_de.json": JSON.stringify({
+          first: "Energie",
+        }),
+      },
+    }),
+    { targetLanguage: "en" },
+  );
+  const created = [];
+  await translateProject(project, {
+    translatorFactory: async ({ sourceLanguage, targetLanguage }) => {
+      created.push(`${sourceLanguage}-${targetLanguage}`);
+      return {
+        async translate(text) {
+          return text.replace("Energie", "Energy");
+        },
+        async destroy() {},
+      };
+    },
+  });
+  assert.deepEqual(created, ["de-en"]);
+  assert.equal(project.entries[0].translation, "Energy");
 });
 
 test("local translation translates non-Latin source text", async () => {

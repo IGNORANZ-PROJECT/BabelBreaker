@@ -2,7 +2,7 @@
 
 [日本語](README.md)
 
-Babel Breaker is an open-source browser tool that detects and translates language files from Minecraft, Factorio, Stardew Valley, and RimWorld mods into ten target languages.
+Babel Breaker is an open-source browser tool that detects and translates text from Minecraft, Factorio, Stardew Valley, and RimWorld mods or modpacks into eleven target languages.
 
 The mod archive, extracted text, glossary, translation, and generated ZIP stay in the user's browser. There is no application backend, account, or API key.
 
@@ -11,6 +11,9 @@ The mod archive, extracted text, glossary, translation, and generated ZIP stay i
 - Drag and drop one or multiple `.jar` or `.zip` mod files
 - Auto-detect the game and supported language-file format
   - Minecraft Java Edition `.json` / `.lang`
+  - Patchouli resource-pack guidebook category, entry, and template JSON
+  - FTB Quests 1.21 locale SNBT plus visible fields in legacy SNBT and binary NBT
+  - Names and descriptions in legacy Better Questing JSON
   - Factorio `locale/<language>/*.cfg`
   - Stardew Valley Content Patcher `i18n/*.json`
   - RimWorld Keyed and DefInjected XML
@@ -19,10 +22,10 @@ The mod archive, extracted text, glossary, translation, and generated ZIP stay i
 - Avoid auto-translating Han-only text when Japanese and Chinese cannot be distinguished safely
 - Translate locally with Mozilla Bergamot and WebAssembly
 - Translate non-English pairs locally by pivoting from the source language through English to the target
-- Target Japanese, Korean, Simplified Chinese, Traditional Chinese, German, Spanish, French, Brazilian Portuguese, Russian, or Italian
+- Target English, Japanese, Korean, Simplified Chinese, Traditional Chinese, German, Spanish, French, Brazilian Portuguese, Russian, or Italian
 - Switch the interface between Japanese, English, Korean, Simplified Chinese, and Spanish
-- Default the target language to the selected interface language; English UI falls back to a supported browser preference
-- Preserve Minecraft placeholders, color codes, line breaks, and URLs
+- Default the target language to the selected interface language
+- Preserve Minecraft placeholders, named quest substitutions, Patchouli `$(...)` formatting, color codes, line breaks, and URLs
 - Reuse existing translations for the selected locale
 - Review and edit every translation in the browser
 - Show machine-translated entries under Needs review by default
@@ -31,6 +34,8 @@ The mod archive, extracted text, glossary, translation, and generated ZIP stay i
 - Ignore entries individually or in bulk and omit unresolved, ignored, or unsafe entries without blocking ZIP creation
 - Process several mods from the same game and download their outputs in one bundle
 - Build resource packs for Minecraft 1.11–1.21.11 and 26.1
+- Add translated Patchouli locale JSON to the Minecraft resource pack
+- Build a translation bundle with separate resource-pack and instance files when FTB Quests or Better Questing data is detected
 - Build complete translated replacement-mod ZIPs for Factorio
 - Build complete translated replacement-mod ZIPs for Stardew Valley Content Patcher mods
 - Build standalone RimWorld translation-mod ZIPs without modifying or including the original mod
@@ -62,6 +67,13 @@ npm run check
 ```
 
 The production site is generated under `dist/`.
+
+## Minecraft extended-format scope
+
+- Patchouli support targets resource-pack books under `assets/<namespace>/patchouli_books/<book>/<locale>/`.
+- FTB Quests 1.21 locale files under `config/ftbquests/quests/lang/<locale>.snbt` reuse existing target translations. Legacy quest SNBT and binary NBT extract fields such as `title`, `subtitle`, and `description`.
+- Better Questing support extracts fields such as `name`, `desc`, and `description` from quest JSON under `config/betterquesting`.
+- Binary `.nbt` preserves all 12 tag types, Java Modified UTF-8, and raw, GZIP, or zlib compression while changing visible strings only. Malformed or over-limit NBT is skipped unchanged with a warning.
 
 ## Firebase Hosting and model delivery
 

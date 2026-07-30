@@ -9,6 +9,10 @@ import {
   getTargetLanguage,
   languageFromMinecraftLocale,
 } from "./languages.js";
+import {
+  extractMinecraftContentDocuments,
+  renderMinecraftContentDocument,
+} from "./minecraft-content.js";
 
 export const APP_NAME = "Babel Breaker";
 export const TARGET_LOCALE = getTargetLanguage(DEFAULT_TARGET_LANGUAGE).minecraftLocale;
@@ -45,15 +49,15 @@ export const SUPPORTED_GAMES = {
 
 const GAME_TARGET_LOCALES = {
   factorio: {
-    ja: "ja", ko: "ko", "zh-Hans": "zh-CN", "zh-Hant": "zh-TW",
+    en: "en", ja: "ja", ko: "ko", "zh-Hans": "zh-CN", "zh-Hant": "zh-TW",
     de: "de", es: "es-ES", fr: "fr", pt: "pt-BR", ru: "ru", it: "it",
   },
   stardew: {
-    ja: "ja", ko: "ko", "zh-Hans": "zh", "zh-Hant": "zh-TW",
+    en: "default", ja: "ja", ko: "ko", "zh-Hans": "zh", "zh-Hant": "zh-TW",
     de: "de", es: "es", fr: "fr", pt: "pt", ru: "ru", it: "it",
   },
   rimworld: {
-    ja: "Japanese", ko: "Korean", "zh-Hans": "ChineseSimplified",
+    en: "English", ja: "Japanese", ko: "Korean", "zh-Hans": "ChineseSimplified",
     "zh-Hant": "ChineseTraditional", de: "German", es: "Spanish",
     fr: "French", pt: "PortugueseBrazilian", ru: "Russian", it: "Italian",
   },
@@ -91,7 +95,7 @@ export const MINECRAFT_VERSIONS = [
 const SOURCE_LOCALE_PRIORITY = ["en_us", "en_gb"];
 const VALID_NAMESPACE_PATTERN = /^[a-z0-9_.-]+$/;
 const TOKEN_PATTERN =
-  /%(?:\d+\$)?[-#+ 0,(<]*\d*(?:\.\d+)?[tT]?[a-zA-Z%]|\{[0-9]+\}|§[0-9a-fk-or]|\\[ntr]|[\n\t\r]|https?:\/\/[^\s]+/gi;
+  /\$\([^)]*\)|%(?:\d+\$)?[-#+ 0,(<]*\d*(?:\.\d+)?[tT]?[a-zA-Z%]|\{[A-Za-z0-9_.:-]+\}|§[0-9a-fk-or]|\\[ntr]|[\n\t\r]|https?:\/\/[^\s]+/gi;
 const TRANSLATABLE_TEXT_PATTERN = /\p{L}/u;
 const LETTER_PATTERN = /\p{L}/gu;
 const JAPANESE_KANA_PATTERN = /[\p{Script=Hiragana}\p{Script=Katakana}]/gu;
@@ -288,6 +292,18 @@ async function readEntryText(entry, label, maxLength = MAX_LANG_TEXT_LENGTH) {
     throw new Error(`${label} が大きすぎます。`);
   }
   return text.replace(/^\uFEFF/, "");
+}
+
+async function readEntryBytes(entry, label, maxLength = MAX_LANG_TEXT_LENGTH) {
+  const declaredSize = getDeclaredUncompressedSize(entry);
+  if (declaredSize !== null && declaredSize > maxLength) {
+    throw new Error(`${label} の展開後サイズが大きすぎます。`);
+  }
+  const bytes = await entry.async("uint8array");
+  if (bytes.byteLength > maxLength) {
+    throw new Error(`${label} が大きすぎます。`);
+  }
+  return bytes;
 }
 
 function findEntry(entries, wantedPath) {
@@ -824,10 +840,35 @@ export async function analyzeArchive(
   }
   archiveEntries.forEach(assertSafeArchivePath);
 
+  let totalContentLength = 0;
+  const readMinecraftContentText = async (entry, label) => {
+    const text = await readEntryText(entry, label);
+    totalContentLength += text.length;
+    if (totalContentLength > MAX_TOTAL_LANG_BYTES) {
+      throw new Error("翻訳対象ファイルの合計サイズが大きすぎます。");
+    }
+    return text;
+  };
+  const readMinecraftContentBytes = async (entry, label) => {
+    const bytes = await readEntryBytes(entry, label);
+    totalContentLength += bytes.byteLength;
+    if (totalContentLength > MAX_TOTAL_LANG_BYTES) {
+      throw new Error("翻訳対象ファイルの合計サイズが大きすぎます。");
+    }
+    return bytes;
+  };
+  const minecraftContent = await extractMinecraftContentDocuments(
+    archiveEntries,
+    {
+      readText: readMinecraftContentText,
+      readBytes: readMinecraftContentBytes,
+      targetLocale: resolvedTargetLocale,
+    },
+  );
   const langEntries = archiveEntries.filter(
     (entry) => !entry.dir && /^assets\/[^/]+\/lang\/[^/]+\.(json|lang)$/i.test(entry.name),
   );
-  if (!langEntries.length) {
+  if (!langEntries.length && !minecraftContent.documents.length) {
     const detectedGame = archiveEntries.some(
       (entry) => !entry.dir && /(^|\/)locale\/[^/]+\/[^/]+\.cfg$/i.test(entry.name),
     )
@@ -864,7 +905,7 @@ export async function analyzeArchive(
     throw new Error("langファイルの展開後サイズが大きすぎます。");
   }
 
-  const warnings = [];
+  const warnings = [...minecraftContent.warnings];
   const sources = [];
   let totalLangLength = 0;
   for (const entry of langEntries) {
@@ -895,7 +936,7 @@ export async function analyzeArchive(
       warnings.push(`${entry.name} を読み飛ばしました: ${error.message}`);
     }
   }
-  if (!sources.length) {
+  if (!sources.length && !minecraftContent.documents.length) {
     throw new Error("読み込めるlangファイルがありませんでした。");
   }
 
@@ -904,7 +945,17 @@ export async function analyzeArchive(
     if (!grouped.has(source.namespace)) grouped.set(source.namespace, []);
     grouped.get(source.namespace).push(source);
   }
-  const mod = await detectModMetadata(archiveEntries, file.name, [...grouped.keys()]);
+  const detectedNamespaces = [
+    ...new Set([
+      ...grouped.keys(),
+      ...minecraftContent.documents.map((document) => document.namespaceId),
+    ]),
+  ];
+  const mod = await detectModMetadata(
+    archiveEntries,
+    file.name,
+    detectedNamespaces,
+  );
   const namespaces = [];
   const entries = [];
   let entryId = 0;
@@ -977,6 +1028,81 @@ export async function analyzeArchive(
     });
   }
 
+  for (const document of minecraftContent.documents) {
+    const localeLanguage = languageFromMinecraftLocale(document.sourceLocale);
+    const namespaceEntryIds = [];
+    const namespaceSourceLanguages = new Set();
+    document.records = document.records.map((record) => {
+      const sourceText = record.source;
+      const targetText = record.existingTarget;
+      const sourceIsEmpty = !String(sourceText).trim();
+      const languageMetadata = classifyEntryLanguage(
+        sourceText,
+        localeLanguage,
+      );
+      const { sourceLanguage } = languageMetadata;
+      if (sourceLanguage) namespaceSourceLanguages.add(sourceLanguage);
+      const sourceIsTarget =
+        document.sourceLocale === resolvedTargetLocale ||
+        sourceLanguage === language.id;
+      const needsTranslation =
+        !sourceIsEmpty &&
+        !languageMetadata.translationBlocked &&
+        !sourceIsTarget &&
+        shouldTranslate(sourceText, targetText);
+      const id = String(entryId++);
+      namespaceEntryIds.push(id);
+      entries.push({
+        id,
+        namespace: document.namespace,
+        key: record.displayKey,
+        source: sourceText,
+        ...languageMetadata,
+        sourceLocale: document.sourceLocale,
+        translation: sourceIsEmpty
+          ? ""
+          : sourceIsTarget
+            ? sourceText
+            : needsTranslation
+              ? ""
+              : languageMetadata.translationBlocked
+                ? ""
+                : targetText ?? sourceText,
+        status: sourceIsEmpty
+          ? "excluded"
+          : needsTranslation || languageMetadata.translationBlocked
+            ? "pending"
+            : "preserved",
+        ignored: false,
+        warning: "",
+        contentKind: document.kind,
+        contentFormat: document.format,
+        sourcePath: document.sourcePath,
+      });
+      return { ...record, entryId: id };
+    });
+
+    const detectedSourceLanguages = [...namespaceSourceLanguages];
+    namespaces.push({
+      namespace: document.namespace,
+      sourceLocale: document.sourceLocale,
+      sourceLanguage:
+        detectedSourceLanguages.length === 1
+          ? detectedSourceLanguages[0]
+          : null,
+      sourceLanguages: detectedSourceLanguages,
+      sourcePath: document.sourcePath,
+      outputPath: document.outputPath,
+      existingTargetPath: document.existingTargetPath,
+      preserved: {},
+      entryIds: namespaceEntryIds,
+      format: document.format,
+      contentKind: document.kind,
+      contentDocument: document,
+      requiresInstanceInstall: document.requiresInstanceInstall,
+    });
+  }
+
   const sourceLanguages = [
     ...new Set(entries.map((entry) => entry.sourceLanguage).filter(Boolean)),
   ];
@@ -1002,6 +1128,8 @@ export async function analyzeArchive(
     namespaces,
     entries,
     warnings,
+    contentKinds: minecraftContent.kinds,
+    requiresInstanceInstall: minecraftContent.requiresInstanceInstall,
     createdAt: new Date().toISOString(),
   };
 }
@@ -1064,6 +1192,11 @@ export function combineProjects(projects) {
           sourcePath: namespace.sourcePath,
           outputPath: namespace.outputPath,
           format: namespace.format,
+          contentKind: namespace.contentKind,
+          contentDocument: namespace.contentDocument
+            ? { ...namespace.contentDocument, records: [] }
+            : null,
+          requiresInstanceInstall: Boolean(namespace.requiresInstanceInstall),
           existingTargetPath: namespace.existingTargetPath,
           preserved: {},
           entryIds: [],
@@ -1129,6 +1262,17 @@ export function combineProjects(projects) {
         entries.push(entry);
         entryMap.set(collisionKey, entry);
         combinedNamespace.entryIds.push(id);
+        if (combinedNamespace.contentDocument && namespace.contentDocument) {
+          const sourceRecord = namespace.contentDocument.records.find(
+            (record) => record.entryId === sourceId,
+          );
+          if (sourceRecord) {
+            combinedNamespace.contentDocument.records.push({
+              ...sourceRecord,
+              entryId: id,
+            });
+          }
+        }
       }
     }
   }
@@ -1193,6 +1337,12 @@ export function combineProjects(projects) {
     namespaces,
     entries,
     warnings,
+    contentKinds: [
+      ...new Set(validProjects.flatMap((project) => project.contentKinds || [])),
+    ],
+    requiresInstanceInstall: validProjects.some(
+      (project) => project.requiresInstanceInstall,
+    ),
     sourceProjects: validProjects,
     createdAt: new Date().toISOString(),
     isBatch: true,
@@ -1361,7 +1511,7 @@ export function buildTranslationRequest(project) {
     ...sourceLines,
     `Translate only the values into ${target.englishName} (${target.nativeName}). Never change a key.`,
     "Use each namespace's detected source language. Use concise, natural wording suitable for short in-game UI text.",
-    "Preserve every formatting token exactly, including %s, %1$d, {0}, §a, line breaks, and URLs.",
+    "Preserve every formatting token exactly, including %s, %1$d, {0}, {team}, §a, Patchouli $(...) codes, line breaks, and URLs.",
     "Return only JSON with the same structure. Do not add explanations or Markdown.",
     "",
     buildClipboardPayload(project),
@@ -1557,7 +1707,7 @@ export async function translateProject(
       addPair("en", targetLanguage);
     } else {
       addPair(sourceLanguage, "en");
-      addPair("en", targetLanguage);
+      if (targetLanguage !== "en") addPair("en", targetLanguage);
     }
   }
 
@@ -1607,10 +1757,13 @@ export async function translateProject(
               const sourceToEnglish = translators.get(
                 pairKey(entry.sourceLanguage, "en"),
               );
+              if (targetLanguage === "en") {
+                translator = sourceToEnglish;
+              }
               const englishToTarget = translators.get(
                 pairKey("en", targetLanguage),
               );
-              if (sourceToEnglish && englishToTarget) {
+              if (!translator && sourceToEnglish && englishToTarget) {
                 translator = {
                   async translate(text) {
                     return englishToTarget.translate(
@@ -1956,9 +2109,31 @@ export async function buildResourcePack(project, versionId = project.minecraftVe
   const version = getMinecraftVersion(versionId);
   const zip = new JSZip();
   const entriesById = new Map(project.entries.map((entry) => [entry.id, entry]));
+  const instanceDocuments = [];
+  let hasResourcePackContent = false;
   zip.file("pack.mcmeta", `${JSON.stringify(buildPackMetadata(project, versionId), null, 2)}\n`);
 
   for (const namespace of project.namespaces) {
+    if (namespace.contentDocument) {
+      const contents = renderMinecraftContentDocument(
+        namespace.contentDocument,
+        entriesById,
+        shouldIncludeEntryInOutput,
+      );
+      if (namespace.requiresInstanceInstall) {
+        instanceDocuments.push({
+          path:
+            namespace.contentDocument.installPath ||
+            namespace.contentDocument.outputPath,
+          contents,
+          kind: namespace.contentKind,
+        });
+      } else {
+        zip.file(namespace.contentDocument.outputPath, contents);
+        hasResourcePackContent = true;
+      }
+      continue;
+    }
     const translated = { ...namespace.preserved };
     for (const id of namespace.entryIds) {
       const entry = entriesById.get(id);
@@ -1974,6 +2149,7 @@ export async function buildResourcePack(project, versionId = project.minecraftVe
       ? stringifyLegacyLang(translated)
       : `${JSON.stringify(translated, null, 2)}\n`;
     zip.file(`assets/${namespace.namespace}/lang/${project.targetLocale}.${extension}`, contents);
+    hasResourcePackContent = true;
   }
 
   zip.file(
@@ -1999,7 +2175,57 @@ export async function buildResourcePack(project, versionId = project.minecraftVe
     ].join("\n"),
   );
 
-  const archive = await zip.generateAsync(archiveGenerationOptions(outputType));
-  const filename = `${sanitizeFileName(project.mod.name)}_${sanitizeFileName(project.mod.version)}_${project.targetLocale}.zip`;
-  return { archive, filename };
+  const baseName = `${sanitizeFileName(project.mod.name)}_${sanitizeFileName(project.mod.version)}_${project.targetLocale}`;
+  if (!instanceDocuments.length) {
+    const archive = await zip.generateAsync(archiveGenerationOptions(outputType));
+    return { archive, filename: `${baseName}.zip` };
+  }
+
+  const bundle = new JSZip();
+  if (hasResourcePackContent) {
+    const resourcePack = await zip.generateAsync(
+      archiveGenerationOptions("uint8array"),
+    );
+    bundle.file(`${baseName}_resourcepack.zip`, resourcePack);
+  }
+  for (const document of instanceDocuments) {
+    bundle.file(`instance/${document.path}`, document.contents);
+  }
+  bundle.file(
+    "README.txt",
+    [
+      `${APP_NAME} Minecraft translation bundle`,
+      `mod=${project.mod.name}`,
+      `minecraft=${version.label}`,
+      `target_locale=${project.targetLocale}`,
+      `generated_at=${new Date().toISOString()}`,
+      "",
+      ...(hasResourcePackContent
+        ? [
+            `1. Copy ${baseName}_resourcepack.zip to the resourcepacks folder without extracting it.`,
+            "2. Extract this bundle and copy the contents of the instance folder into the Minecraft instance root.",
+          ]
+        : [
+            "1. Extract this bundle.",
+            "2. Copy the contents of the instance folder into the Minecraft instance root.",
+          ]),
+      "3. Back up existing quest files before replacing them, then restart Minecraft or reload the quest data.",
+      "",
+      ...(hasResourcePackContent
+        ? [
+            `1. ${baseName}_resourcepack.zip は解凍せずresourcepacksフォルダへ入れてください。`,
+            "2. このバンドルを展開し、instanceフォルダの中身をMinecraftインスタンスのルートへコピーしてください。",
+          ]
+        : [
+            "1. このバンドルを展開してください。",
+            "2. instanceフォルダの中身をMinecraftインスタンスのルートへコピーしてください。",
+          ]),
+      "3. 既存のクエストファイルをバックアップしてから置き換え、Minecraftを再起動するかクエストデータを再読込してください。",
+      "",
+    ].join("\n"),
+  );
+  const archive = await bundle.generateAsync(
+    archiveGenerationOptions(outputType),
+  );
+  return { archive, filename: `${baseName}_translation_bundle.zip` };
 }

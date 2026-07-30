@@ -2,7 +2,7 @@
 
 [English](README.en.md)
 
-Minecraft、Factorio、Stardew Valley、RimWorldのMODから言語ファイルと原文言語を自動判定し、10言語へ翻訳して導入用ZIPを作るブラウザアプリです。
+Minecraft、Factorio、Stardew Valley、RimWorldのMODやMODパックから翻訳対象と原文言語を自動判定し、11言語へ翻訳して導入用ZIPを作るブラウザアプリです。
 
 JAR の解析、翻訳、ZIP 生成はすべてユーザーのブラウザ内で行われます。MOD や翻訳内容をサーバーへアップロードしません。
 
@@ -11,6 +11,9 @@ JAR の解析、翻訳、ZIP 生成はすべてユーザーのブラウザ内で
 - 1件または複数の `.jar` / `.zip` をドラッグ＆ドロップ
 - 対応ゲームと形式を自動判定
   - Minecraft Java Edition: `.json` / `.lang`、Fabric / Forge / NeoForge / Quilt
+  - Patchouli: リソースパック型ガイドブックのcategories / entries / templates JSON
+  - FTB Quests: 1.21系のロケールSNBTと、旧形式SNBT／バイナリNBT内のタイトル・説明
+  - Better Questing: 旧形式のクエストJSON内にある名称・説明
   - Factorio: `locale/<language>/*.cfg`
   - Stardew Valley: Content Patcher `i18n/*.json`
   - RimWorld: `Languages` 内の Keyed / DefInjected XML
@@ -20,13 +23,13 @@ JAR の解析、翻訳、ZIP 生成はすべてユーザーのブラウザ内で
 - 漢字だけの文章や、言語を特定できない文字体系の不一致は自動翻訳せず、手動確認へ回す
 - Mozilla Bergamot と WebAssembly を使った端末内翻訳
 - 英語以外の言語間は、ブラウザ内だけで原文→英語→翻訳先の順に翻訳
-- 端末内翻訳の原文・翻訳先10言語: 日本語、韓国語、中国語（簡体・繁体）、ドイツ語、スペイン語、フランス語、ポルトガル語、ロシア語、イタリア語（原文は英語にも対応）
-- 翻訳先10言語: 日本語、韓国語、中国語（簡体・繁体）、ドイツ語、スペイン語、フランス語、ポルトガル語（ブラジル）、ロシア語、イタリア語
+- 端末内翻訳の原文・翻訳先11言語: 英語、日本語、韓国語、中国語（簡体・繁体）、ドイツ語、スペイン語、フランス語、ポルトガル語、ロシア語、イタリア語
+- 翻訳先11言語: 英語、日本語、韓国語、中国語（簡体・繁体）、ドイツ語、スペイン語、フランス語、ポルトガル語（ブラジル）、ロシア語、イタリア語
 - UI 5言語: 日本語、英語、韓国語、簡体字中国語、スペイン語
-- UI言語に合わせて翻訳先を初期選択（英語UIでは端末の対応言語を優先）
+- UI言語に合わせて翻訳先を初期選択
 - 非対応環境・任意の外部ツール向けのコピー翻訳
 - 外部翻訳用の原文JSON保存と、翻訳済みJSON / TXTの読込・ドロップ
-- `%s`、`%1$d`、`{0}`、`§a`、改行、URL の保護
+- `%s`、`%1$d`、`{0}`、`{team}`、`§a`、Patchouliの`$(...)`、改行、URL の保護
 - 選択言語の既存lang（`ja_jp`、`de_de` など）を再利用し、不足分だけ翻訳
 - 翻訳内容をブラウザ上で確認・修正
 - 機械翻訳した項目を「要確認」として初期表示
@@ -35,6 +38,8 @@ JAR の解析、翻訳、ZIP 生成はすべてユーザーのブラウザ内で
 - 項目単位または一括で無視し、未翻訳・無視・安全でない項目を除外していつでもZIPを作成
 - 同じゲームの複数MODを一括処理し、1回のダウンロードにまとめて出力
 - Minecraft 1.11–1.21.11 / 26.1 向けリソースパックを生成
+- Patchouli翻訳は対象ロケールのガイドブックJSONとしてリソースパックへ収録
+- FTB Quests / Better Questingを検出した場合は、リソースパックとインスタンス配置用ファイルを分けた翻訳バンドルを生成
 - Factorio向けに、元MODと翻訳済みlocaleをまとめた入れ替え用MOD ZIPを生成
 - Stardew Valley向けに、元MODと翻訳済みi18nをまとめた入れ替え用MOD ZIPを生成
 - RimWorld向けに、元MODを変更しない独立した翻訳MOD ZIPを生成
@@ -92,7 +97,7 @@ Firebase SDK は使用していません。Hosting はアプリの静的ファ�
 
 ## 基本フロー
 
-1. 1件または複数の MOD JAR / ZIP をドロップ
+1. 1件または複数の MOD JAR / ZIP、またはMODパックZIPをドロップ
 2. 自動検出されたゲーム・MOD・原文言語を確認
 3. 「この端末で翻訳」または「外部ツールで翻訳」を選択
    - 外部ツール方式では依頼文をコピーするか、原文JSONを保存
@@ -100,7 +105,8 @@ Firebase SDK は使用していません。Hosting はアプリの静的ファ�
 4. 「要確認」に表示された翻訳結果を確認・修正
 5. 単体または複数MODの導入用ZIPをダウンロード
 6. 画面に表示されるゲーム別手順に沿って導入
-   - MinecraftはZIPを解凍せず `resourcepacks` へ追加
+   - 通常のMinecraft／Patchouli出力はZIPを解凍せず `resourcepacks` へ追加
+   - FTB Quests／Better Questingを含む翻訳バンドルは展開し、同梱READMEに従って`instance`の中身をインスタンスへコピー
    - Factorioは元MODをバックアップし、翻訳済みMOD ZIPへ入れ替え
    - Stardew Valleyは元MODをバックアップし、翻訳済みMODを `Stardew Valley/Mods` へ展開
    - RimWorldは元MODを残し、翻訳MODを `RimWorld/Mods` へ展開して元MODより後に有効化
@@ -117,6 +123,8 @@ BabelBreaker/
 ├─ src/
 │  ├─ app.js          # UI と操作フロー
 │  ├─ core.js         # 対応ゲーム判定・翻訳保護・ZIP生成
+│  ├─ minecraft-content.js # Patchouli・クエスト形式の解析と安全な再構築
+│  ├─ nbt.js               # Java Edition NBTの型保持・圧縮・展開
 │  ├─ i18n.js         # UIの5言語表示
 │  ├─ languages.js    # 原文・翻訳先とMinecraft言語コード
 │  ├─ local-translator.js # Bergamotモデル・Worker管理
@@ -130,6 +138,13 @@ BabelBreaker/
 ```
 
 Firebase で公開されるのは、ビルドで生成される `dist/` のみです。
+
+### Minecraft拡張形式の範囲
+
+- Patchouliは`assets/<namespace>/patchouli_books/<book>/<locale>/`にある、リソースパックから上書き可能な書籍本文を対象にします。
+- FTB Quests 1.21系は`config/ftbquests/quests/lang/<locale>.snbt`を対象にし、既存の翻訳があれば再利用します。旧形式ではクエストSNBTまたはバイナリNBT内の`title`、`subtitle`、`description`などを対象にします。
+- Better Questingは`config/betterquesting`内のクエストJSONから`name`、`desc`、`description`などを抽出します。
+- バイナリ`.nbt`は全12タグ型、Java Modified UTF-8、raw／GZIP／zlib圧縮を型付きで往復し、表示文字列だけを書き換えます。壊れたNBTや制限を超えるデータは、変更せず警告付きで読み飛ばします。
 
 ## プライバシー
 

@@ -60,6 +60,11 @@ const state = {
   abortController: null,
   busy: false,
 };
+const CONTENT_KIND_LABELS = {
+  patchouli: "Patchouli",
+  ftbquests: "FTB Quests",
+  betterquesting: "Better Questing",
+};
 
 const icon = (name, size = 20) => {
   const paths = {
@@ -86,8 +91,13 @@ const icon = (name, size = 20) => {
 };
 
 const targetLanguageOptions = TARGET_LANGUAGES.map(
-  (language) =>
-    `<option value="${language.id}" ${language.id === state.targetLanguage ? "selected" : ""}>${language.nativeName} · ${language.englishName}</option>`,
+  (language) => {
+    const label =
+      language.nativeName === language.englishName
+        ? language.nativeName
+        : `${language.nativeName} · ${language.englishName}`;
+    return `<option value="${language.id}" ${language.id === state.targetLanguage ? "selected" : ""}>${label}</option>`;
+  },
 ).join("");
 
 const uiLanguageOptions = UI_LOCALES.map(
@@ -678,8 +688,13 @@ function updateProjectSummary() {
   updateStartLabel();
 }
 
-function renderGameGuide(game = "minecraft") {
-  const prefix = game === "minecraft" ? "guide" : `${game}Guide`;
+function renderGameGuide(game = "minecraft", instanceBundle = false) {
+  const prefix =
+    game === "minecraft" && instanceBundle
+      ? "minecraftBundleGuide"
+      : game === "minecraft"
+        ? "guide"
+        : `${game}Guide`;
   for (const [id, suffix] of [
     ["guide-step", "Step"],
     ["guide-title", "Title"],
@@ -703,6 +718,14 @@ function renderGameGuide(game = "minecraft") {
 
 function outputUiKeys(project) {
   const game = project.game || "minecraft";
+  if (game === "minecraft" && project.requiresInstanceInstall) {
+    return {
+      title: "readyBundleTitle",
+      copy: "readyBundleCopy",
+      download: "downloadTranslationBundle",
+      success: "downloadTranslationBundleSuccess",
+    };
+  }
   if (project.isBatch && game !== "minecraft") {
     return {
       title: "readyBatchTitle",
@@ -773,6 +796,9 @@ function renderProject({ scroll = true } = {}) {
           source: sourceLanguageSummary(),
           target: currentTarget().nativeName,
         }),
+        ...(project.contentKinds || []).map(
+          (kind) => CONTENT_KIND_LABELS[kind] || kind,
+        ),
       ].filter(Boolean),
     ),
   ]
@@ -786,7 +812,10 @@ function renderProject({ scroll = true } = {}) {
   elements["ready-title"].textContent = t(outputCopy.title);
   elements["ready-copy"].textContent = t(outputCopy.copy);
   elements["download-label"].textContent = t(outputCopy.download);
-  renderGameGuide(project.game || "minecraft");
+  renderGameGuide(
+    project.game || "minecraft",
+    Boolean(project.requiresInstanceInstall),
+  );
   elements["review-panel"].hidden = true;
   elements["clipboard-panel"].hidden = true;
   elements["progress-panel"].hidden = true;

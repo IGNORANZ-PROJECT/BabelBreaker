@@ -35,12 +35,12 @@ test("default translation target follows the interface language", () => {
   assert.equal(getDefaultTargetLanguage("ko", ["en-US"]), "ko");
   assert.equal(getDefaultTargetLanguage("zh-Hans", ["en-US"]), "zh-Hans");
   assert.equal(getDefaultTargetLanguage("es", ["en-US"]), "es");
-  assert.equal(getDefaultTargetLanguage("en", ["en-US", "de-DE"]), "de");
-  assert.equal(getDefaultTargetLanguage("en", ["en-US"]), "ja");
+  assert.equal(getDefaultTargetLanguage("en", ["ja-JP"]), "en");
 });
 
 test("all translation targets have a Minecraft locale", () => {
-  assert.equal(TARGET_LANGUAGES.length, 10);
+  assert.equal(TARGET_LANGUAGES.length, 11);
+  assert.equal(getTargetLanguage("en").minecraftLocale, "en_us");
   assert.equal(getTargetLanguage("ko").minecraftLocale, "ko_kr");
   assert.equal(getTargetLanguage("missing").minecraftLocale, "ja_jp");
   assert.equal(
