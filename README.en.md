@@ -29,9 +29,11 @@ The mod archive, extracted text, glossary, translation, and generated ZIP stay i
 - Include untranslated entries in the default review queue and sort them before errors, unclear languages, and machine translations
 - Treat blank source values as non-translatable instead of untranslated
 - Ignore entries individually or in bulk and omit unresolved, ignored, or unsafe entries without blocking ZIP creation
-- Combine several mods from the same game into one translation ZIP
+- Process several mods from the same game and download their outputs in one bundle
 - Build resource packs for Minecraft 1.11–1.21.11 and 26.1
-- Build merge-ready translation-only ZIPs for Factorio, Stardew Valley, and RimWorld
+- Build complete translated replacement-mod ZIPs for Factorio
+- Build complete translated replacement-mod ZIPs for Stardew Valley Content Patcher mods
+- Build standalone RimWorld translation-mod ZIPs without modifying or including the original mod
 - Copy a request or download source JSON for an external translation tool
 - Paste, select, or drop a translated JSON/TXT file back into the review flow
 
@@ -93,3 +95,5 @@ See [Privacy](PRIVACY.md) and [Security Policy](SECURITY.md).
 Babel Breaker is available under the [MIT License](LICENSE). Runtime dependencies and translation models retain their own licenses; production builds include `THIRD_PARTY_NOTICES.txt`.
 
 Babel Breaker is an unofficial community tool and is not affiliated with the developers or publishers of any supported game. Check a mod's license and author policy before publishing or redistributing generated translations.
+
+Factorio and Stardew Valley outputs contain files from the selected original mod to make personal installation a simple replacement. Do not redistribute those output archives unless the original mod's license or author permits it. RimWorld output is a separate translation mod and does not contain the original mod.

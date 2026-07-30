@@ -605,6 +605,15 @@ function sourceLanguageWarning(entry) {
   return "";
 }
 
+function entryKeyLabel(entry) {
+  const key = String(entry.key || "");
+  const separator = key.indexOf("\u0000");
+  if (separator < 0) return key;
+  const section = key.slice(0, separator);
+  const name = key.slice(separator + 1);
+  return section ? `[${section}] ${name}` : name;
+}
+
 function sourceLanguageSummary() {
   if (!state.project) return "";
   const sources = [
@@ -692,6 +701,40 @@ function renderGameGuide(game = "minecraft") {
   elements["minecraft-troubleshooting"].hidden = game !== "minecraft";
 }
 
+function outputUiKeys(project) {
+  const game = project.game || "minecraft";
+  if (project.isBatch && game !== "minecraft") {
+    return {
+      title: "readyBatchTitle",
+      copy: "readyBatchCopy",
+      download: "downloadModBundle",
+      success: "downloadBatchSuccess",
+    };
+  }
+  if (game === "factorio" || game === "stardew") {
+    return {
+      title: "readyTranslatedModTitle",
+      copy: "readyTranslatedModCopy",
+      download: "downloadTranslatedMod",
+      success: "downloadTranslatedModSuccess",
+    };
+  }
+  if (game === "rimworld") {
+    return {
+      title: "readyRimWorldTitle",
+      copy: "readyRimWorldCopy",
+      download: "downloadTranslationMod",
+      success: "downloadTranslationModSuccess",
+    };
+  }
+  return {
+    title: "readyTitle",
+    copy: "readyCopy",
+    download: "downloadPack",
+    success: "downloadSuccess",
+  };
+}
+
 function renderProject({ scroll = true } = {}) {
   if (!state.project) return;
   const { project } = state;
@@ -716,29 +759,33 @@ function renderProject({ scroll = true } = {}) {
     ? t("batchModName", { count: project.mods.length })
     : project.mod.name;
   elements["mod-tags"].innerHTML = [
-    SUPPORTED_GAMES[project.game || "minecraft"]?.name,
-    project.mod.loader,
-    project.mod.version !== "unknown" && project.mod.version !== "batch"
-      ? `v${project.mod.version}`
-      : "",
-    t("languageFileCount", {
-      count: stats.namespaces.toLocaleString(numberLocale),
-    }),
-    t("detectedLanguageRoute", {
-      source: sourceLanguageSummary(),
-      target: currentTarget().nativeName,
-    }),
+    ...new Set(
+      [
+        SUPPORTED_GAMES[project.game || "minecraft"]?.name,
+        project.mod.loader,
+        project.mod.version !== "unknown" && project.mod.version !== "batch"
+          ? `v${project.mod.version}`
+          : "",
+        t("languageFileCount", {
+          count: stats.namespaces.toLocaleString(numberLocale),
+        }),
+        t("detectedLanguageRoute", {
+          source: sourceLanguageSummary(),
+          target: currentTarget().nativeName,
+        }),
+      ].filter(Boolean),
+    ),
   ]
-    .filter(Boolean)
     .map((tag) => `<span>${escapeHtml(tag)}</span>`)
     .join("");
   updateProjectSummary();
   const isMinecraft = (project.game || "minecraft") === "minecraft";
   elements["minecraft-settings"].hidden = !isMinecraft;
   if (isMinecraft) elements["minecraft-version"].value = project.minecraftVersion;
-  elements["download-label"].textContent = isMinecraft
-    ? t("downloadPack")
-    : t("downloadTranslationZip");
+  const outputCopy = outputUiKeys(project);
+  elements["ready-title"].textContent = t(outputCopy.title);
+  elements["ready-copy"].textContent = t(outputCopy.copy);
+  elements["download-label"].textContent = t(outputCopy.download);
   renderGameGuide(project.game || "minecraft");
   elements["review-panel"].hidden = true;
   elements["clipboard-panel"].hidden = true;
@@ -820,12 +867,13 @@ function updateReviewChrome(stats = getProjectStats(state.project)) {
     ambiguous: stats.ambiguous.toLocaleString(numberLocale),
   });
   elements["download-button"].disabled = state.busy;
-  elements["ready-title"].textContent = t("downloadReady");
-  elements["ready-copy"].textContent = t("downloadSummary", {
+  const outputCopy = outputUiKeys(state.project);
+  elements["ready-title"].textContent = t(outputCopy.title);
+  elements["ready-copy"].textContent = `${t(outputCopy.copy)} · ${t("downloadSummary", {
     output: stats.output.toLocaleString(numberLocale),
     omitted: stats.omitted.toLocaleString(numberLocale),
     ignored: stats.ignored.toLocaleString(numberLocale),
-  });
+  })}`;
   elements["ignore-ambiguous-button"].disabled = stats.ambiguous === 0;
 }
 
@@ -840,6 +888,7 @@ function renderEntries() {
           (entry) => {
             const workflowState = getEntryWorkflowState(entry);
             const locked = ["ignored", "excluded"].includes(workflowState);
+            const keyLabel = entryKeyLabel(entry);
             return `
             <article class="entry-row ${entry.warning || languageNeedsReview(entry) ? "has-warning" : ""} ${workflowState === "ignored" ? "is-ignored" : ""}" data-entry-id="${entry.id}">
               <div class="entry-key">
@@ -847,7 +896,7 @@ function renderEntries() {
                   <span>${escapeHtml(entry.modName ? `${entry.modName} · ${entry.namespace}` : entry.namespace)}</span>
                   <span class="status-pill status-${workflowState}">${escapeHtml(workflowStateLabel(entry))}</span>
                 </div>
-                <code title="${escapeHtml(entry.key)}">${escapeHtml(entry.key)}</code>
+                <code title="${escapeHtml(keyLabel)}">${escapeHtml(keyLabel)}</code>
                 ${workflowState !== "excluded" ? `<button class="entry-ignore-button" type="button" data-ignore-id="${entry.id}">${t(workflowState === "ignored" ? "restoreEntry" : "ignoreEntry")}</button>` : ""}
               </div>
               <div class="entry-source">
@@ -857,7 +906,7 @@ function renderEntries() {
               </div>
               <span class="entry-arrow">${icon("arrow", 16)}</span>
               <label class="entry-translation">
-                <span class="sr-only">${escapeHtml(t("translationAria", { key: entry.key, target: currentTarget().nativeName }))}</span>
+                <span class="sr-only">${escapeHtml(t("translationAria", { key: keyLabel, target: currentTarget().nativeName }))}</span>
                 <small>${escapeHtml(t("translation", { target: currentTarget().nativeName }))} ${entry.status === "preserved" ? `· ${t("existing")}` : entry.status === "translated" ? `· ${t("filterWarning")}` : ""}</small>
                 <textarea rows="${entry.translation.length > 70 || entry.source.length > 70 ? 3 : 1}" data-translation-id="${entry.id}" spellcheck="false" ${locked ? "disabled" : ""}>${escapeHtml(entry.translation)}</textarea>
                 ${entry.warning ? `<span class="entry-warning translation-warning">${icon("warning", 14)} ${escapeHtml(entry.warning)}</span>` : ""}
@@ -1106,12 +1155,7 @@ async function downloadPack() {
     anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
     showNotice(
-      t(
-        (state.project.game || "minecraft") === "minecraft"
-          ? "downloadSuccess"
-          : "downloadTranslationSuccess",
-        { filename },
-      ),
+      t(outputUiKeys(state.project).success, { filename }),
       "success",
     );
     document.querySelector("#guide").scrollIntoView({ behavior: "smooth", block: "start" });

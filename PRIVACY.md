@@ -8,11 +8,13 @@ Babel Breaker is designed to process game MOD translation data locally in the us
 - extracted language files
 - translation results
 - glossary entries
-- downloaded resource packs
+- generated resource packs, translated mods, or translation mods
 - user accounts or API keys
 - application cookies, Analytics identifiers, or LocalStorage data
 
 The browser version does not include an application backend.
+
+For Factorio and Stardew Valley, the browser copies the selected original archive and adds the translated language files to create a replacement mod. For RimWorld, it creates a separate translation mod without copying the original mod. Both operations happen locally; generated archives are not uploaded or retained by Babel Breaker.
 
 ## Local translation model
 
