@@ -55,6 +55,13 @@ test("Firebase permits only the pinned Hugging Face model hosts", async () => {
   assert.doesNotMatch(csp, /r2\.dev|storage\.googleapis\.com|raw\.githubusercontent\.com/);
   assert.equal(firebaseConfig.hosting.public, "dist");
   assert.equal(firebaseConfig.functions, undefined);
+  for (const source of ["/", "/index.html"]) {
+    const rule = firebaseConfig.hosting.headers.find((item) => item.source === source);
+    assert.equal(
+      rule?.headers.find((header) => header.key === "Cache-Control")?.value,
+      "no-cache",
+    );
+  }
 });
 
 test("tracked legal notices cover the app and translation models", async () => {
