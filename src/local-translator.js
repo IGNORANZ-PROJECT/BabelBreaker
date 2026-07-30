@@ -1,5 +1,5 @@
 const MODEL_REGISTRY_URL = "/model-registry.json";
-const MODEL_CACHE_NAME = "babel-breaker-translation-models-v1";
+const MODEL_CACHE_NAME = "babel-breaker-translation-models-v2";
 
 function emitProgress(callback, percent) {
   callback(Math.max(0, Math.min(100, Math.round(percent))));
@@ -19,6 +19,17 @@ async function openModelCache(runtime) {
   } catch {
     return null;
   }
+}
+
+async function decompressModel(buffer, compression, runtime) {
+  if (!compression) return buffer;
+  if (compression !== "gzip") {
+    throw new Error(`未対応のモデル圧縮形式です: ${compression}`);
+  }
+  const stream = new runtime.Blob([buffer])
+    .stream()
+    .pipeThrough(new runtime.DecompressionStream("gzip"));
+  return new runtime.Response(stream).arrayBuffer();
 }
 
 function createMozillaBackingClass(TranslatorBacking, runtime) {
@@ -101,11 +112,11 @@ function createMozillaBackingClass(TranslatorBacking, runtime) {
       if (!Array.isArray(registry.models)) {
         throw new Error("翻訳モデル一覧の形式が正しくありません");
       }
-      this.expectedModelSizes = new Map(
+      this.modelFileMetadata = new Map(
         registry.models.flatMap((model) =>
           Object.values(model.files || {})
-            .filter((file) => file?.name && Number.isSafeInteger(file.size))
-            .map((file) => [file.name, file.size]),
+            .filter((file) => file?.name)
+            .map((file) => [file.name, file]),
         ),
       );
       emitProgress(this.onModelProgress, 8);
@@ -128,7 +139,8 @@ function createMozillaBackingClass(TranslatorBacking, runtime) {
 
       const cacheCandidate = !fromCache && cache ? response.clone() : null;
       const buffer = await response.arrayBuffer();
-      const expectedSize = this.expectedModelSizes?.get(url);
+      const metadata = this.modelFileMetadata?.get(url);
+      const expectedSize = metadata?.size;
 
       if (expectedSize !== undefined && buffer.byteLength !== expectedSize) {
         if (cache) await cache.delete(url).catch(() => {});
@@ -145,6 +157,11 @@ function createMozillaBackingClass(TranslatorBacking, runtime) {
       if (cacheCandidate) {
         await cache.put(url, cacheCandidate).catch(() => {});
       }
+      const modelBuffer = await decompressModel(
+        buffer,
+        metadata?.compression,
+        runtime,
+      );
 
       this.modelFileCompleted = (this.modelFileCompleted || 0) + 1;
       const total = Math.max(this.modelFileTotal || 1, 1);
@@ -152,7 +169,7 @@ function createMozillaBackingClass(TranslatorBacking, runtime) {
         this.onModelProgress,
         8 + (this.modelFileCompleted / total) * 82,
       );
-      return buffer;
+      return modelBuffer;
     }
   };
 }
@@ -162,7 +179,10 @@ export function getLocalTranslatorStatus(runtime = globalThis) {
     typeof runtime.WebAssembly === "object" &&
     typeof runtime.Worker === "function" &&
     typeof runtime.fetch === "function" &&
-    typeof runtime.crypto?.subtle?.digest === "function";
+    typeof runtime.crypto?.subtle?.digest === "function" &&
+    typeof runtime.DecompressionStream === "function" &&
+    typeof runtime.Blob === "function" &&
+    typeof runtime.Response === "function";
   return {
     supported,
     availability: supported ? "downloadable" : "unavailable",

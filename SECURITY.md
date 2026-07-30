@@ -29,7 +29,7 @@ Please include:
 - The app does not use Firebase Authentication, Storage, Firestore, Analytics, cookies, or API keys.
 - Clipboard mode sends nothing automatically; users choose where to paste copied text.
 - Source languages are inferred from archive locale filenames; no source text is sent to a language-detection service.
-- Local model files are pinned to the `models-v1` Git tag by URL, byte size, and SHA-256 and are rechecked before inclusion in a build and after browser download.
-- Firebase production builds exclude model binaries; CSP permits model downloads only from `raw.githubusercontent.com`, which must continue to allow cross-origin browser requests.
+- Compressed local model files are pinned to an immutable Hugging Face commit by URL, byte size, and SHA-256 and are checked before browser-side decompression.
+- Firebase production builds exclude model binaries; CSP permits model downloads only from the selected Hugging Face delivery hosts.
 - Non-English translation pivots through English entirely inside local WebAssembly workers.
 - Untrusted archives are subject to path, entry-count, namespace, and decompressed-size validation.

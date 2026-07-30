@@ -30,6 +30,9 @@ function supportedRuntime() {
   return {
     WebAssembly: {},
     Worker,
+    Blob,
+    Response,
+    DecompressionStream,
     fetch: async () => {
       throw new Error("unexpected fetch");
     },
@@ -47,6 +50,13 @@ test("local translator status detects required browser primitives", () => {
     getLocalTranslatorStatus({
       ...supportedRuntime(),
       Worker: undefined,
+    }).supported,
+    false,
+  );
+  assert.equal(
+    getLocalTranslatorStatus({
+      ...supportedRuntime(),
+      DecompressionStream: undefined,
     }).supported,
     false,
   );

@@ -46,7 +46,7 @@ npm run dev
 
 Open the localhost URL shown by Vite.
 
-The first development or production build downloads 20 pinned bidirectional Mozilla models, verifies their sizes and SHA-256 hashes, and stores them under the ignored `public/models/` directory. The complete build-time model set is about 876 MiB. A visitor downloads only the models needed for the current translation: about 36–65 MB for English source text, or usually about 58–136 MB for a non-English pair that pivots through English. Mods with several source languages may require additional source-to-English models. The browser may reuse models from Cache Storage.
+Development and production builds do not download model binaries. A visitor downloads only the compressed models needed for the current translation: about 24–48 MiB for English source text, or usually about 38–94 MiB for a non-English pair that pivots through English. The browser expands and SHA-256 verifies each download, then may reuse it from Cache Storage.
 
 ## Test and build
 
@@ -56,23 +56,17 @@ npm run check
 
 The production site is generated under `dist/`.
 
-## Firebase Hosting and GitHub model delivery
+## Firebase Hosting and model delivery
 
 The configured Firebase project is `babel-breaker`.
-Firebase serves only the roughly 6 MB Web application. The roughly 876 MiB model set is stored as regular Git files under `public/models/` in this public repository and served from `raw.githubusercontent.com` at the pinned `models-v1` tag. Babel Breaker does not use Git LFS, Firebase Storage, or a paid CDN.
+Firebase serves only the roughly 6 MB Web application. The roughly 619 MiB compressed model set is sourced from Mozilla Firefox Translations, pinned to an immutable commit of a public Hugging Face mirror, and delivered directly to each browser. Babel Breaker does not require Firebase Storage, Functions, a paid CDN, or a credit card.
 
 ```bash
-# Create the immutable model tag once on the commit containing the model files
-git tag models-v1
-git push origin models-v1
-
 npm run verify:model-hosting
 firebase deploy --only hosting
 ```
 
-Do not move or overwrite `models-v1` after publication. For a model update, change `GITHUB_MODEL_REVISION` to a new value such as `models-v2` and publish that new tag.
-
-The Firebase predeploy hook runs `npm run check:firebase`, points the model registry to the pinned tag in this GitHub repository, and removes `dist/models`. The Content Security Policy allows model requests only to `raw.githubusercontent.com`. Every model file is under 100 MiB and is committed as a regular Git file, so Git LFS storage and bandwidth billing do not apply.
+The Firebase predeploy hook runs `npm run check:firebase`, verifies every pinned model URL, byte size, and CORS policy, and removes `dist/models`. The Content Security Policy allows model requests only to the pinned Hugging Face delivery hosts. Run `npm run sync:models` when intentionally updating the pinned model catalog.
 
 Firebase Hosting serves application files only. Babel Breaker does not use Firebase Authentication, Firestore, Storage, Analytics, or an application API.
 
@@ -81,7 +75,7 @@ Firebase Hosting serves application files only. Babel Breaker does not use Fireb
 - Mod files and translation text are not uploaded
 - No account, API key, app cookie, Analytics ID, or LocalStorage data
 - Cache Storage contains only reusable public translation-model files
-- Model downloads come from the pinned tag in this public GitHub repository and are SHA-256 verified
+- Model downloads come from a pinned public Hugging Face commit and are SHA-256 verified
 - Non-English pivot translation remains entirely inside the browser
 - Archive paths, expanded language-data size, and entry count are validated
 - Minecraft formatting tokens are checked again before ZIP generation

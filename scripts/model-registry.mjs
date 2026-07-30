@@ -1,12 +1,11 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { MODEL_CATALOG } from "./model-catalog.mjs";
+import { MODEL_CATALOG, MODEL_SOURCE } from "./model-catalog.mjs";
 
-export const GITHUB_MODEL_REPOSITORY = "IGNORANZ-PROJECT/BabelBreaker";
-export const GITHUB_MODEL_REVISION = "models-v1";
-export const PRODUCTION_MODEL_BASE_URL =
-  `https://raw.githubusercontent.com/${GITHUB_MODEL_REPOSITORY}/${GITHUB_MODEL_REVISION}/public/models`;
+export const MODEL_REPOSITORY = MODEL_SOURCE.repository;
+export const MODEL_REVISION = MODEL_SOURCE.revision;
+export const PRODUCTION_MODEL_BASE_URL = MODEL_SOURCE.baseUrl;
 
 export function normalizeModelBaseUrl(value = "/models") {
   const trimmed = String(value || "").trim().replace(/\/+$/, "");
@@ -41,9 +40,13 @@ export function createModelRegistry(baseUrl = "/models") {
         Object.entries(model.files).map(([part, file]) => [
           part,
           {
-            name: `${normalizedBaseUrl}/${pairName}/${file.fileName}`,
+            name:
+              normalizedBaseUrl === PRODUCTION_MODEL_BASE_URL
+                ? `${normalizedBaseUrl}/${file.location}`
+                : `${normalizedBaseUrl}/${pairName}/${file.fileName}`,
             size: file.size,
             expectedSha256Hash: file.hash,
+            ...(file.compression ? { compression: file.compression } : {}),
           },
         ]),
       );

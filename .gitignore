@@ -15,6 +15,7 @@ node_modules/
 dist/
 public/bergamot/
 public/model-registry.json
+public/models/
 
 # Test and QA artifacts
 .playwright-cli/

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { MODEL_CATALOG } from "../scripts/model-catalog.mjs";
+import {
+  MODEL_CATALOG,
+  MODEL_SOURCE,
+} from "../scripts/model-catalog.mjs";
 import {
   PRODUCTION_MODEL_BASE_URL,
   assertProductionModelBaseUrl,
@@ -41,18 +44,16 @@ test("every pinned model file has integrity metadata", () => {
     assert.ok(Object.keys(model.files).length >= 3);
     for (const file of Object.values(model.files)) {
       assert.ok(file.fileName);
-      assert.match(file.location, /^main-workspace\/translations-models\//);
+      assert.match(file.location, /^[a-z_]+-[a-z_]+\/.+\.gz$/i);
       assert.ok(file.size > 0);
-      assert.ok(
-        file.size < 100 * 1024 * 1024,
-        `${file.fileName} exceeds GitHub's regular-file limit`,
-      );
       assert.match(file.hash, /^[a-f0-9]{64}$/);
+      assert.equal(file.compression, "gzip");
     }
   }
+  assert.match(MODEL_SOURCE.revision, /^[a-f0-9]{40}$/);
 });
 
-test("production registry uses the pinned repository model revision", () => {
+test("production registry uses the pinned model mirror revision", () => {
   const registry = createModelRegistry(PRODUCTION_MODEL_BASE_URL);
   const urls = registry.models.flatMap((model) =>
     Object.values(model.files)

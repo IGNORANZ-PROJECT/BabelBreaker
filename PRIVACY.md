@@ -18,7 +18,7 @@ The browser version does not include an application backend.
 
 Local translation uses the Mozilla Bergamot WebAssembly engine. Babel Breaker detects source languages from Minecraft locale filenames. Supported local source languages are English, Japanese, Korean, Simplified Chinese, Traditional Chinese, German, Spanish, French, Portuguese, Russian, and Italian; the same set except English is available as a target. For non-English language pairs, the browser translates source-to-English and then English-to-target without sending either stage outside the device.
 
-The browser downloads only the pinned models needed for the current translation from the `models-v1` tag in the public Babel Breaker GitHub repository. The development build obtains those models from Mozilla's official distribution endpoint, and both the build and browser verify their SHA-256 hashes. Model requests contain only static model-file paths; they do not contain MOD text, extracted language entries, glossary entries, or translation results.
+The browser downloads only the required compressed models from an immutable commit in the public `mukowaty/firefox-translations` Hugging Face repository. That repository mirrors Mozilla Firefox Translations models. Babel Breaker verifies the compressed byte size and SHA-256 before expanding a model. Requests contain only static model-file paths; they do not contain MOD text, extracted language entries, glossary entries, or translation results.
 
 Downloaded model files may be retained in the browser's Cache Storage so they can be reused. Babel Breaker does not store MOD contents or translation results in that cache. Users can remove the model cache by clearing this site's stored data in their browser.
 
@@ -28,15 +28,15 @@ External-tool mode creates the copyable request and downloadable source JSON loc
 
 ## Firebase Hosting
 
-Firebase Hosting distributes the application's static HTML, CSS, JavaScript, icons, and legal notices. Translation-model files are excluded from the Firebase deployment and are served as public files by GitHub. According to Firebase's privacy documentation, Hosting processes incoming request IP addresses to detect abuse and provide usage analysis, and retains IP data for a limited period. GitHub separately processes requests for static model files under its own privacy terms.
+Firebase Hosting distributes the application's static HTML, CSS, JavaScript, icons, and legal notices. Translation-model files are excluded from Firebase and served by Hugging Face. According to Firebase's privacy documentation, Hosting processes incoming request IP addresses to detect abuse and provide usage analysis, and retains IP data for a limited period. Hugging Face separately processes requests for static model files under its own privacy terms.
 
 Firebase privacy information:
 
 https://firebase.google.com/support/privacy/
 
-GitHub privacy information:
+Hugging Face privacy information:
 
-https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement
+https://huggingface.co/privacy
 
 ## Contact and changes
 

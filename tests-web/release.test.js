@@ -5,8 +5,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
-  GITHUB_MODEL_REPOSITORY,
-  GITHUB_MODEL_REVISION,
+  MODEL_REPOSITORY,
+  MODEL_REVISION,
   PRODUCTION_MODEL_BASE_URL,
 } from "../scripts/model-registry.mjs";
 
@@ -33,16 +33,16 @@ test("release metadata identifies the public MIT repository", async () => {
   );
 });
 
-test("production models are pinned to this repository", () => {
-  assert.equal(GITHUB_MODEL_REPOSITORY, "IGNORANZ-PROJECT/BabelBreaker");
-  assert.match(GITHUB_MODEL_REVISION, /^models-v[1-9][0-9]*$/);
+test("production models are pinned to an immutable public mirror commit", () => {
+  assert.equal(MODEL_REPOSITORY, "mukowaty/firefox-translations");
+  assert.match(MODEL_REVISION, /^[a-f0-9]{40}$/);
   assert.equal(
     PRODUCTION_MODEL_BASE_URL,
-    `https://raw.githubusercontent.com/${GITHUB_MODEL_REPOSITORY}/${GITHUB_MODEL_REVISION}/public/models`,
+    `https://huggingface.co/${MODEL_REPOSITORY}/resolve/${MODEL_REVISION}`,
   );
 });
 
-test("Firebase permits only the pinned GitHub model origin", async () => {
+test("Firebase permits only the pinned Hugging Face model hosts", async () => {
   const firebaseConfig = JSON.parse(await read("firebase.json"));
   const globalHeaders = firebaseConfig.hosting.headers.find(
     (rule) => rule.source === "**",
@@ -50,8 +50,9 @@ test("Firebase permits only the pinned GitHub model origin", async () => {
   const csp = globalHeaders.find(
     (header) => header.key === "Content-Security-Policy",
   ).value;
-  assert.match(csp, /connect-src 'self' https:\/\/raw\.githubusercontent\.com/);
-  assert.doesNotMatch(csp, /r2\.dev|storage\.googleapis\.com/);
+  assert.match(csp, /connect-src 'self' https:\/\/huggingface\.co/);
+  assert.match(csp, /https:\/\/\*\.hf\.co/);
+  assert.doesNotMatch(csp, /r2\.dev|storage\.googleapis\.com|raw\.githubusercontent\.com/);
   assert.equal(firebaseConfig.hosting.public, "dist");
   assert.equal(firebaseConfig.functions, undefined);
 });
@@ -65,12 +66,12 @@ test("tracked legal notices cover the app and translation models", async () => {
   assert.match(notices, /jszip@/);
 });
 
-test("privacy and security disclosures identify Firebase and GitHub", async () => {
+test("privacy and security disclosures identify Firebase and model hosting", async () => {
   const privacy = await read("PRIVACY.md");
   const security = await read("SECURITY.md");
   assert.match(privacy, /Firebase Hosting/);
-  assert.match(privacy, /GitHub/);
-  assert.match(security, /raw\.githubusercontent\.com/);
+  assert.match(privacy, /Hugging Face/);
+  assert.match(security, /Hugging Face/);
   assert.match(security, /SHA-256/);
 });
 

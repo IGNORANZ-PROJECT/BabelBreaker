@@ -1,3 +1,0 @@
-public/models/**/*.bin binary
-public/models/**/*.spm binary
-public/models/** linguist-generated=true

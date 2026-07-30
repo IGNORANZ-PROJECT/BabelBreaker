@@ -6,9 +6,10 @@
   "description": "Multilingual Minecraft MOD resource-pack generator with local browser translation.",
   "scripts": {
     "prepare:legal": "node scripts/prepare-legal.mjs",
-    "prepare:models": "node scripts/prepare-models.mjs",
-    "dev": "npm run prepare:legal && npm run prepare:models && vite --host 127.0.0.1",
-    "build": "npm run prepare:legal && npm run prepare:models && vite build",
+    "prepare:registry": "node scripts/prepare-registry.mjs",
+    "sync:models": "node scripts/sync-model-catalog.mjs",
+    "dev": "npm run prepare:legal && npm run prepare:registry && vite --host 127.0.0.1",
+    "build": "npm run prepare:legal && npm run prepare:registry && vite build",
     "build:firebase": "node scripts/build-firebase.mjs",
     "check:firebase": "npm run test && npm run build:firebase && npm run verify:model-hosting",
     "verify:model-hosting": "node scripts/verify-model-hosting.mjs",

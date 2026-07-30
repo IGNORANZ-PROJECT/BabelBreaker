@@ -52,7 +52,7 @@ npm run dev
 ```
 
 表示された `http://127.0.0.1:5173` をモダンブラウザで開きます。
-初回の `npm run dev` / `npm run build` では、Mozilla の双方向20モデル（合計約876MiB）を公式配信元から取得し、サイズと SHA-256 を検証します。検証済みファイルがある場合は再取得しません。サイト利用者が取得するのは翻訳に必要なモデルだけです。英語原文では約36〜65MB、英語以外から別言語では英語を経由する2モデルでおおむね約58〜136MBです。複数の原文言語を含むMODでは、必要な原文→英語モデルが追加されます。
+開発・本番ビルド時に翻訳モデル本体はダウンロードしません。サイト利用者が取得するのは翻訳に必要な圧縮モデルだけです。英語原文では約24〜48MiB、英語以外から別言語では英語を経由する2モデルでおおむね約38〜94MiBです。取得後はブラウザ内で展開・SHA-256検証し、Cache Storageから再利用します。
 
 ## テストと本番ビルド
 
@@ -69,23 +69,17 @@ npm run build
 
 生成物は `dist/` に出力されます。
 
-## Firebase Hosting とGitHubモデル配信
+## Firebase Hosting とモデル配信
 
 Firebase プロジェクトは `.firebaserc` の `babel-breaker` を使用します。
-Firebaseには約6MBのWebアプリだけを配置します。約876MiBの翻訳モデルは、この公開リポジトリの `public/models/` に通常のGitファイルとして収録し、`models-v1` タグを固定した `raw.githubusercontent.com` から配信します。Git LFS、Firebase Storage、有料CDNは使用しません。
+Firebaseには約6MBのWebアプリだけを配置します。約619MiBの圧縮モデル一式は、Mozilla Firefox Translationsモデルの公開ミラーを不変コミットに固定し、Hugging Faceからブラウザへ直接配信します。Firebase Storage、Functions、有料CDN、クレジットカード登録は不要です。
 
 ```bash
-# モデルを含むコミットに、初回のみ固定タグを作成
-git tag models-v1
-git push origin models-v1
-
 npm run verify:model-hosting
 firebase deploy --only hosting
 ```
 
-`models-v1` は公開後に移動・上書きしない固定タグです。モデルを更新するときはコード内の `GITHUB_MODEL_REVISION` を `models-v2` などへ変更し、新しいタグを作成します。
-
-`firebase deploy` のpredeployは `npm run check:firebase` を実行し、モデルURLを同じGitHubリポジトリの固定タグへ設定したうえで `dist/models` を除外します。Content Security Policyは、モデル取得先として `raw.githubusercontent.com` だけを許可します。全モデルは100MiB未満なのでGitHubの通常ファイルとして保存でき、Git LFSの容量・帯域課金は発生しません。
+`firebase deploy` のpredeployは `npm run check:firebase` を実行し、全モデルのURL・容量・CORSを確認して `dist/models` を除外します。Content Security Policyは固定したHugging Face配信元だけを許可します。モデル一覧の更新は `npm run sync:models` で行い、取得した圧縮ファイルの容量とSHA-256をコードへ固定します。
 
 Firebase SDK は使用していません。Hosting はアプリの静的ファイルだけを配信し、MOD の内容や翻訳履歴を保存しません。
 
@@ -133,7 +127,7 @@ Firebase で公開されるのは、ビルドで生成される `dist/` のみ�
 - アプリ独自の Cookie / Analytics / LocalStorage を使用しない
 - Cache Storage には再利用可能な公開翻訳モデルだけを保存する
 
-端末内翻訳モデルは、同じGitHubリポジトリの固定タグから配信します。開発時に Mozilla の公式配信元から固定バージョンを取得し、ブラウザでの実行時にもSHA-256を検証します。英語を経由する翻訳もすべてブラウザ内で行い、モデル取得リクエストに MOD の内容や翻訳文は含まれません。外部ツール方式では、ユーザー自身が選んだサービスへ貼り付けた場合に限り、そのテキストが端末外へ送られます。
+端末内翻訳モデルは、Mozilla Firefox Translationsモデルの公開Hugging Faceミラーにある不変コミットから配信します。圧縮ファイルは容量とSHA-256を検証してからブラウザ内で展開します。英語を経由する翻訳もすべてブラウザ内で行い、モデル取得リクエストに MOD の内容や翻訳文は含まれません。外部ツール方式では、ユーザー自身が選んだサービスへ貼り付けた場合に限り、そのテキストが端末外へ送られます。
 
 Firebase Hosting は静的ファイルの配信時にアクセス元 IP アドレスを処理します。これは不正利用の検出と利用状況の分析に使用され、Firebase のプライバシー条件が適用されます。
 

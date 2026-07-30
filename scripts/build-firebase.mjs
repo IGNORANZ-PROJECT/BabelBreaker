@@ -58,5 +58,5 @@ if (
 }
 
 process.stdout.write(
-  `Firebase build uses the public GitHub model files at ${baseUrl}; dist/models was excluded.\n`,
+  `Firebase build uses pinned external model files at ${baseUrl}; dist/models was excluded.\n`,
 );
