@@ -22,7 +22,7 @@ test("tool interface supports five display languages", () => {
 test("language interpolation and browser locale detection work", () => {
   assert.equal(
     createI18n("en").t("workspaceTitle", { target: "Deutsch" }),
-    "Translate this file to Deutsch",
+    "Translate this mod into Deutsch",
   );
   assert.equal(detectUiLocale("ko-KR"), "ko");
   assert.equal(detectUiLocale("fr-FR"), "en");
