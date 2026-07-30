@@ -1,232 +1,152 @@
 # Babel Breaker
 
-Babel Breaker は、Minecraft mod の `lang` を翻訳し、そのまま使えるリソースパック ZIP を作るツールです。
+[English](README.en.md)
 
-このツールで重要なのは、`lang` のキーを変えないことです。
+Minecraft MOD の言語ファイルから原文言語を自動判定し、10言語へ翻訳して、そのまま使えるリソースパック ZIP を作るブラウザアプリです。
 
-- キー: 内部 ID
-- 値: ゲーム内に表示される文章
+JAR の解析、翻訳、ZIP 生成はすべてユーザーのブラウザ内で行われます。MOD や翻訳内容をサーバーへアップロードしません。
 
-Babel Breaker は、値だけを翻訳してキーは維持します。
+## 新しいブラウザ版
 
-## できること
+- 1件または複数の `.jar` / `.zip` をドラッグ＆ドロップ
+- Fabric / Forge / NeoForge / Quilt のメタデータを検出
+- 複数 namespace と `.json` / `.lang` に対応
+- `en_us`、`fr_fr`、`de_de` などのMinecraft言語コードと本文から原文言語を自動判定
+- ファイル名の宣言言語と本文の検出言語を分け、日本語・韓国語の高信頼な不一致を項目単位で表示
+- 漢字だけの文章や、言語を特定できない文字体系の不一致は自動翻訳せず、手動確認へ回す
+- Mozilla Bergamot と WebAssembly を使った端末内翻訳
+- 英語以外の言語間は、ブラウザ内だけで原文→英語→翻訳先の順に翻訳
+- 端末内翻訳の原文・翻訳先10言語: 日本語、韓国語、中国語（簡体・繁体）、ドイツ語、スペイン語、フランス語、ポルトガル語、ロシア語、イタリア語（原文は英語にも対応）
+- 翻訳先10言語: 日本語、韓国語、中国語（簡体・繁体）、ドイツ語、スペイン語、フランス語、ポルトガル語（ブラジル）、ロシア語、イタリア語
+- UI 5言語: 日本語、英語、韓国語、簡体字中国語、スペイン語
+- UI言語に合わせて翻訳先を初期選択（英語UIでは端末の対応言語を優先）
+- 非対応環境・任意の外部ツール向けのコピー翻訳
+- 外部翻訳用の原文JSON保存と、翻訳済みJSON / TXTの読込・ドロップ
+- `%s`、`%1$d`、`{0}`、`§a`、改行、URL の保護
+- 選択言語の既存lang（`ja_jp`、`de_de` など）を再利用し、不足分だけ翻訳
+- 翻訳内容をブラウザ上で確認・修正
+- 機械翻訳した項目を「要確認」として初期表示
+- 「要確認」には未翻訳も含め、未翻訳・エラー・判定保留・機械翻訳の順で表示
+- 空の原文は翻訳対象外として扱い、未翻訳件数には含めない
+- 項目単位または一括で無視し、未翻訳・無視・安全でない項目を除外していつでもZIPを作成
+- 複数MODを1つの翻訳リソースパックへ統合
+- Minecraft 1.11–1.21.11 / 26.1 向けリソースパックを生成
+- Firebase Hosting で静的配信
 
-- mod の `.jar` / `.zip` / 解凍済みフォルダをそのまま読める
-- 元 `lang` を自動で取り出せる
-- 翻訳済み JSON からリソースパック ZIP を作れる
-- クラウド AI またはローカル AI を使って翻訳から ZIP 作成まで一気に進められる
-- 複数 namespace / 複数 source lang の mod に対応
-- GUI と CUI の両方で使える
+API キー、Ollama、LM Studio、ユーザー登録は不要です。
 
-## 最初の使い方
+Web 版: https://babel-breaker.web.app/
 
-### Mac
+ソースコードは MIT License で公開しています。
 
-1. このフォルダを開く
-2. `launch_gui.command` を実行する
-3. 初回セットアップが終わるまで待つ
+## ローカル開発
 
-### Windows
+必要なもの:
 
-1. このフォルダを開く
-2. `launch_gui.bat` を実行する
-3. 初回セットアップが終わるまで待つ
-
-同梱ランチャーが自動で行うこと:
-
-- `uv` のローカル配置
-- Python 3.12 のローカル配置
-- 必要パッケージのインストール
-- GUI の起動
-
-つまり、Python を手で入れる必要はありません。
-
-初回起動時に必要なもの:
-
-- インターネット接続
-- 少しの待ち時間
-
-## GUI の流れ
-
-1. mod の `.jar` / `.zip` を入れる
-2. 翻訳方法を選ぶ
-3. 必要なら詳細設定を開く
-4. `元 lang を取得` または `リソースパック生成` を押す
-
-普段は GUI だけで足ります。
-
-## 翻訳方法の違い
-
-### `clipboard`
-
-1 件ずつ手早く戻したい時向けです。
-
-- `元 lang を取得` で元 JSON を取り出す
-- 外部 AI や手作業で値だけ翻訳する
-- 翻訳済み JSON をクリップボードへコピーする
-- `リソースパック生成` を押す
-
-### `file`
-
-複数 mod をまとめて処理したい時向けです。
-
-- 翻訳済み `.json` / `.txt` を使える
-- 直接貼り付けたテキストも使える
-- `AI` と同じくキュー処理に向いている
-
-### `クラウド AI`
-
-抽出から翻訳、ZIP 作成まで一気に進めたい時向けです。
-
-- `[api]` の設定が必要
-- API キーは環境変数で渡すのがおすすめ
-- `translation.custom_prompt` で用語ルールを追加できる
-
-### `ローカル AI`
-
-翻訳内容を外部クラウドへ送らず、この PC 上だけで処理したい時向けです。
-
-- Ollama のネイティブ API に対応
-- LM Studio などの OpenAI 互換 Chat Completions に対応
-- API キーは不要
-- 安全のため `localhost` / `127.0.0.1` / `::1` 以外には接続しない
-- GUI の `接続を確認` で、生成前にローカル AI の起動状態を確認できる
-
-Ollama の最小例:
+- Node.js 20 以上
+- npm
 
 ```bash
-ollama pull qwen3:8b
-ollama serve
+npm install
+npm run dev
 ```
 
-その後、GUI で `ローカル AI` → `Ollama` を選び、モデル名を `qwen3:8b` にします。
+表示された `http://127.0.0.1:5173` をモダンブラウザで開きます。
+開発・本番ビルド時に翻訳モデル本体はダウンロードしません。サイト利用者が取得するのは翻訳に必要な圧縮モデルだけです。英語原文では約24〜48MiB、英語以外から別言語では英語を経由する2モデルでおおむね約38〜94MiBです。取得後はブラウザ内で展開・SHA-256検証し、Cache Storageから再利用します。
 
-## いちばん簡単な使い分け
-
-### API を使わない
-
-1. GUI を開く
-2. mod を入れる
-3. `元 lang を取得` を押す
-4. 出てきた JSON を外部 AI に渡す
-5. 戻ってきた JSON を `clipboard` か `file` で使う
-6. `リソースパック生成` を押す
-
-外部 AI への依頼文の例:
-
-```text
-この JSON は Minecraft mod の lang です。
-キーは絶対に変更しないでください。
-値だけ自然な日本語に翻訳してください。
-プレースホルダ、改行、色コードは維持してください。
-JSON 以外は返さないでください。
-```
-
-### クラウド API を使う
-
-1. `babel_breaker_app/config.toml` の `[api]` を設定する
-2. GUI で mod を入れる
-3. `クラウド AI` を選ぶ
-4. `翻訳して ZIP を作成` を押す
-
-### この PC の AI を使う
-
-1. Ollama または LM Studio のローカルサーバーを起動する
-2. GUI で mod を入れる
-3. `ローカル AI` と使用アプリを選ぶ
-4. モデル名を入力して `接続を確認` を押す
-5. `翻訳して ZIP を作成` を押す
-
-## 設定ファイル
-
-設定は `babel_breaker_app/config.toml` に保存されます。
-
-主に触る項目:
-
-```toml
-[general]
-input_path = ""
-output_dir = "_babel_breaker_output"
-
-[translation]
-mode = "clipboard"
-target_locale = "ja_jp"
-cancel_if_target_locale_exists = true
-target_language_name = "Japanese (日本語)"
-enforce_consistent_terms = true
-custom_prompt = ""
-
-[file_mode]
-translation_files_text = ""
-inline_translation_text = ""
-
-[local_ai]
-style = "ollama_chat"
-model = "qwen3:8b"
-url = ""
-```
-
-`config.toml` が無い場合:
-
-- `launch_gui.command` / `launch_gui.bat` を 1 回実行すると自動生成される
-- GUI の `設定を保存` でも作成できる
-
-## CUI で使う
-
-GUI を使わずに実行したい場合の最小例です。
-
-### GUI を CUI から起動
+## テストと本番ビルド
 
 ```bash
-python3 -m babel_breaker_app --gui
+npm run check
 ```
 
-### 通常実行
+個別に実行する場合:
 
 ```bash
-python3 -m babel_breaker_app "/path/to/SomeMod.jar"
+npm test
+npm run build
 ```
 
-### 元 `lang` を取り出す
+生成物は `dist/` に出力されます。
+
+## Firebase Hosting とモデル配信
+
+Firebase プロジェクトは `.firebaserc` の `babel-breaker` を使用します。
+Firebaseには約6MBのWebアプリだけを配置します。約619MiBの圧縮モデル一式は、Mozilla Firefox Translationsモデルの公開ミラーを不変コミットに固定し、Hugging Faceからブラウザへ直接配信します。Firebase Storage、Functions、有料CDN、クレジットカード登録は不要です。
 
 ```bash
-python3 -m babel_breaker_app --extract-lang "/path/to/SomeMod.jar"
+npm run verify:model-hosting
+firebase deploy --only hosting
 ```
 
-## フォルダ構成
+`firebase deploy` のpredeployは `npm run check:firebase` を実行し、全モデルのURL・容量・CORSを確認して `dist/models` を除外します。Content Security Policyは固定したHugging Face配信元だけを許可します。モデル一覧の更新は `npm run sync:models` で行い、取得した圧縮ファイルの容量とSHA-256をコードへ固定します。
+
+Firebase SDK は使用していません。Hosting はアプリの静的ファイルだけを配信し、MOD の内容や翻訳履歴を保存しません。
+
+## 基本フロー
+
+1. 1件または複数の MOD JAR をドロップ
+2. 自動検出された MOD・Minecraft バージョン・原文言語を確認
+3. 「この端末で翻訳」または「外部ツールで翻訳」を選択
+   - 外部ツール方式では依頼文をコピーするか、原文JSONを保存
+   - 翻訳結果は貼り付けるか、JSON / TXTファイルを読み込み
+4. 「要確認」に表示された翻訳結果を確認・修正
+5. 単体または複数MODをまとめたリソースパック ZIP をダウンロード
+6. ZIP を解凍せず Minecraft の `resourcepacks` フォルダーへ入れる
+
+端末内翻訳を初めて使う場合は、必要な Mozilla モデルをダウンロードします。英語以外から別言語へ翻訳するときは、原文→英語と英語→翻訳先の2モデルを端末内で連結します。モデルはブラウザの Cache Storage に保存され、同じモデルは再利用されます。WebAssembly / Web Worker に対応していない環境や、端末内モデルがない原文ロケールでは、外部ツール方式が自動で選択されます。外部ツール用の依頼文にも、検出した原文言語がnamespaceごとに記載されます。
+
+## ディレクトリ
 
 ```text
 BabelBreaker/
-├─ launch_gui.command
-├─ launch_gui.bat
-├─ launch_gui.ps1
-├─ requirements-launcher.txt
-├─ README.md
-├─ LICENSE
-├─ babel_breaker_app/
-├─ .babel_breaker_runtime/  ← 初回起動で自動作成
-├─ .venv/                   ← 初回起動で自動作成
-└─ _babel_breaker_output/   ← 出力先
+├─ index.html
+├─ src/
+│  ├─ app.js          # UI と操作フロー
+│  ├─ core.js         # JAR解析・翻訳保護・ZIP生成
+│  ├─ i18n.js         # UIの5言語表示
+│  ├─ languages.js    # 原文・翻訳先とMinecraft言語コード
+│  ├─ local-translator.js # Bergamotモデル・Worker管理
+│  └─ styles.css
+├─ public/
+├─ scripts/            # 法的表示とモデル資産の準備
+├─ tests-web/
+├─ firebase.json
+├─ .firebaserc
+└─ package.json
 ```
 
-## よくある問題
+Firebase で公開されるのは、ビルドで生成される `dist/` のみです。
 
-### GUI が開かない
+## プライバシー
 
-- まず `launch_gui.command` / `launch_gui.bat` をもう一度実行する
-- 初回起動なら、ダウンロード完了まで待つ
-- 自動でブラウザが開かない場合は、表示された `http://127.0.0.1:...` を手で開く
+- MOD ファイルをサーバーへ送信しない
+- 翻訳テキストを保存しない
+- API キーを要求しない
+- Firebase Storage / Firestore / Authentication を使用しない
+- アプリ独自の Cookie / Analytics / LocalStorage を使用しない
+- Cache Storage には再利用可能な公開翻訳モデルだけを保存する
 
-### `config.toml` が無い
+端末内翻訳モデルは、Mozilla Firefox Translationsモデルの公開Hugging Faceミラーにある不変コミットから配信します。圧縮ファイルは容量とSHA-256を検証してからブラウザ内で展開します。英語を経由する翻訳もすべてブラウザ内で行い、モデル取得リクエストに MOD の内容や翻訳文は含まれません。外部ツール方式では、ユーザー自身が選んだサービスへ貼り付けた場合に限り、そのテキストが端末外へ送られます。
 
-- GUI で `設定を保存` を押す
-- それでも無ければランチャーを 1 回実行する
+Firebase Hosting は静的ファイルの配信時にアクセス元 IP アドレスを処理します。これは不正利用の検出と利用状況の分析に使用され、Firebase のプライバシー条件が適用されます。
 
-### 一部しか翻訳されない
+## セキュリティ
 
-- キーを変更していないか確認する
-- `clipboard` / `file` では、その mod に対応する JSON を使っているか確認する
-- 既に `target_locale` が十分に入っている namespace は安全のためスキップされることがある
+- Content Security Policy で外部スクリプトと外部通信を禁止
+- iframe への埋め込みを禁止
+- JAR 内のパストラバーサルを拒否
+- JAR は最大 512MB、最大 100,000 エントリ
+- lang の展開後合計サイズを制限し、ZIP bomb によるメモリ消費を抑制
+- Minecraft のプレースホルダー、色コード、改行、URL を生成前に検証
+- 本番ソースマップを配信しない
+
+脆弱性の詳細を公開 Issue に直接書かないでください。リポジトリの Private vulnerability reporting を有効にしたうえで、GitHub の「Report a vulnerability」から受け付ける運用を推奨します。
+
+詳細:
+
+- [Privacy](PRIVACY.md)
+- [Security Policy](SECURITY.md)
 
 ## Links
 
@@ -235,7 +155,10 @@ BabelBreaker/
 
 ## License
 
-This project is licensed under the MIT License.
+MIT License
 
-- License text: [LICENSE](./LICENSE)
-- Copyright: `© 2026 IGNORANZ PROJECT`
+`© 2026 IGNORANZ PROJECT`
+
+本番ビルドには、実行時依存パッケージのライセンス全文を収録した `THIRD_PARTY_NOTICES.txt` も含まれます。
+
+Babel Breaker は非公式のコミュニティツールで、Mojang Studios および Microsoft とは関係ありません。生成した翻訳パックを公開・再配布するときは、対象 MOD のライセンスと作者の方針を確認してください。
