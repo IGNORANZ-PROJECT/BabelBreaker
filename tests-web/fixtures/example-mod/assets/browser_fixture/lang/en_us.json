@@ -1,0 +1,5 @@
+{
+  "item.browser_fixture.gear": "Copper Gear",
+  "gui.browser_fixture.progress": "Progress: %1$d%%",
+  "message.browser_fixture.ready": "Machine is ready"
+}
