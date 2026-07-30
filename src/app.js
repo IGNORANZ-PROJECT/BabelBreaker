@@ -129,7 +129,6 @@ document.querySelector("#app").innerHTML = `
           <span>${t("targetLanguage")}</span>
           <select id="target-language">${targetLanguageOptions}</select>
         </label>
-        <small id="target-language-help">${t("targetHelp")}</small>
       </div>
 
       <div class="drop-shell">
@@ -333,6 +332,14 @@ document.querySelector("#app").innerHTML = `
     </section>
 
     <section class="guide section-wrap" id="guide">
+      <div class="guide-tabs" role="tablist" aria-label="${t("supportedGames")}">
+        ${Object.values(SUPPORTED_GAMES)
+          .map(
+            (game, index) =>
+              `<button type="button" role="tab" data-guide-game="${game.id}" aria-selected="${index === 0}">${game.name}</button>`,
+          )
+          .join("")}
+      </div>
       <div class="guide-heading">
         <span class="step-label" id="guide-step">${t("guideStep")}</span>
         <h2 id="guide-title">${t("guideTitle")}</h2>
@@ -423,7 +430,6 @@ const elements = Object.fromEntries(
     "drop-zone",
     "ui-language",
     "target-language",
-    "target-language-help",
     "workspace",
     "workspace-title",
     "notice",
@@ -678,6 +684,11 @@ function renderGameGuide(game = "minecraft") {
   ]) {
     elements[id].textContent = t(`${prefix}${suffix}`);
   }
+  document.querySelectorAll("[data-guide-game]").forEach((button) => {
+    const selected = button.dataset.guideGame === game;
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-selected", String(selected));
+  });
   elements["minecraft-troubleshooting"].hidden = game !== "minecraft";
 }
 
@@ -710,7 +721,9 @@ function renderProject({ scroll = true } = {}) {
     project.mod.version !== "unknown" && project.mod.version !== "batch"
       ? `v${project.mod.version}`
       : "",
-    `${stats.namespaces} namespace${stats.namespaces === 1 ? "" : "s"}`,
+    t("languageFileCount", {
+      count: stats.namespaces.toLocaleString(numberLocale),
+    }),
     t("detectedLanguageRoute", {
       source: sourceLanguageSummary(),
       target: currentTarget().nativeName,
@@ -1142,7 +1155,6 @@ elements["target-language"].addEventListener("change", async (event) => {
   const url = new URL(window.location.href);
   url.searchParams.set("target", state.targetLanguage);
   window.history.replaceState(null, "", url);
-  elements["target-language-help"].textContent = `${t("targetHelp")} · ${localModelDownloadCopy()}`;
   elements["glossary"].placeholder =
     state.targetLanguage === "ja" ? "Gear=歯車\nSteam=蒸気" : "Gear=...\nSteam=...";
   updateAvailability();
@@ -1151,6 +1163,9 @@ elements["target-language"].addEventListener("change", async (event) => {
     elements["translation-paste"].value = "";
     await loadFiles(state.sourceFiles, { scroll: false });
   }
+});
+document.querySelectorAll("[data-guide-game]").forEach((button) => {
+  button.addEventListener("click", () => renderGameGuide(button.dataset.guideGame));
 });
 elements["mod-file"].addEventListener("change", () => {
   const files = elements["mod-file"].files;
@@ -1305,11 +1320,9 @@ function updateAvailability() {
   elements["local-mode-card"].classList.toggle("unavailable", !locallySupported);
   const localRadio = elements["local-mode-card"].querySelector('input[value="local"]');
   localRadio.disabled = !locallySupported;
-  elements["target-language-help"].textContent = `${t("targetHelp")} · ${localModelDownloadCopy()}`;
   if (!locallySupported) selectMode("clipboard");
 }
 
-elements["target-language-help"].textContent = `${t("targetHelp")} · ${localModelDownloadCopy()}`;
 elements["glossary"].placeholder =
   state.targetLanguage === "ja" ? "Gear=歯車\nSteam=蒸気" : "Gear=...\nSteam=...";
 

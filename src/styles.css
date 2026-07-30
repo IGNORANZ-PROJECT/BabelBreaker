@@ -1120,6 +1120,31 @@ select {
   padding: 88px 0;
 }
 
+.guide-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-bottom: 28px;
+}
+
+.guide-tabs button {
+  padding: 8px 12px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.guide-tabs button:hover,
+.guide-tabs button.selected {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .guide-heading,
 .privacy-heading {
   max-width: 650px;
