@@ -19,9 +19,11 @@ async function read(relativePath) {
   return fs.readFile(path.join(projectRoot, relativePath), "utf8");
 }
 
-test("release metadata identifies the public MIT repository", async () => {
+test("release metadata preserves legal files while project promotion is hidden", async () => {
   const packageMetadata = JSON.parse(await read("package.json"));
   const app = await read("src/app.js");
+  const index = await read("index.html");
+  const siteConfig = await read("src/site-config.js");
   assert.equal(packageMetadata.license, "MIT");
   assert.equal(
     packageMetadata.repository.url,
@@ -32,9 +34,11 @@ test("release metadata identifies the public MIT repository", async () => {
     await read("README.md"),
     /https:\/\/github\.com\/IGNORANZ-PROJECT\/BabelBreaker/,
   );
+  assert.match(siteConfig, /SHOW_PROJECT_INFO = false/);
   assert.match(app, /https:\/\/ignoranz-project\.web\.app\//);
   assert.match(app, /https:\/\/x\.com\/IGNORANZ_P/);
   assert.match(app, /rel="noopener noreferrer"/);
+  assert.doesNotMatch(index, /IGNORANZ PROJECT|codeRepository|open-source/);
 });
 
 test("production models are pinned to an immutable public mirror commit", () => {

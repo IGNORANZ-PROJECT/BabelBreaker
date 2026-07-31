@@ -30,6 +30,7 @@ import {
   createI18n,
   detectUiLocale,
 } from "./i18n.js";
+import { SHOW_PROJECT_INFO } from "./site-config.js";
 
 const initialUrl = new URL(window.location.href);
 const requestedUiLocale = initialUrl.searchParams.get("lang");
@@ -105,6 +106,71 @@ const uiLanguageOptions = UI_LOCALES.map(
     `<option value="${locale.id}" ${locale.id === uiLocale ? "selected" : ""}>${locale.label}</option>`,
 ).join("");
 
+const headerProjectLink = SHOW_PROJECT_INFO
+  ? `
+      <a
+        class="header-link header-github"
+        href="https://github.com/IGNORANZ-PROJECT/BabelBreaker"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="${t("githubAria")}"
+      >GitHub ${icon("external", 15)}</a>`
+  : "";
+
+const projectCallout = SHOW_PROJECT_INFO
+  ? `
+      <a
+        class="oss-callout"
+        href="https://github.com/IGNORANZ-PROJECT/BabelBreaker"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        <span>
+          <strong>${t("ossTitle")}</strong>
+          <small>${t("ossCopy")}</small>
+        </span>
+        ${icon("external", 15)}
+      </a>`
+  : "";
+
+const ossPanel = SHOW_PROJECT_INFO
+  ? `
+      <div class="oss-panel">
+        <div>
+          <span class="oss-mark">MIT</span>
+          <span>
+            <strong>${t("ossFreedom")}</strong>
+            <small>
+              © 2026
+              <a class="project-link" href="https://ignoranz-project.web.app/" target="_blank" rel="noopener noreferrer" aria-label="${t("projectSiteAria")}">IGNORANZ PROJECT</a>
+            </small>
+          </span>
+        </div>
+        <div class="oss-links">
+          <a href="https://github.com/IGNORANZ-PROJECT/BabelBreaker" target="_blank" rel="noopener noreferrer">
+            ${t("sourceCode")} ${icon("external", 14)}
+          </a>
+          <a href="/LICENSE.txt" target="_blank" rel="noopener">MIT License</a>
+          <a href="/THIRD_PARTY_NOTICES.txt" target="_blank" rel="noopener">${t("thirdParty")}</a>
+        </div>
+      </div>`
+  : "";
+
+const footerProjectInfo = SHOW_PROJECT_INFO
+  ? `
+    <span>
+      © 2026
+      <a class="project-link" href="https://ignoranz-project.web.app/" target="_blank" rel="noopener noreferrer" aria-label="${t("projectSiteAria")}">IGNORANZ PROJECT</a>
+    </span>`
+  : "<span>© 2026 Babel Breaker</span>";
+
+const footerProjectLinks = SHOW_PROJECT_INFO
+  ? `
+      <a href="/LICENSE.txt" target="_blank" rel="noopener">MIT</a>
+      <a href="https://x.com/IGNORANZ_P" target="_blank" rel="noopener noreferrer" aria-label="${t("xAria")}">X ${icon("external", 15)}</a>
+      <a href="https://github.com/IGNORANZ-PROJECT/BabelBreaker" target="_blank" rel="noopener noreferrer">GitHub ${icon("external", 15)}</a>`
+  : "";
+
 document.querySelector("#app").innerHTML = `
   <header class="site-header">
     <a class="brand" href="/" aria-label="${t("brandHome")}">
@@ -118,13 +184,7 @@ document.querySelector("#app").innerHTML = `
         <select id="ui-language" aria-label="${t("uiLanguage")}">${uiLanguageOptions}</select>
       </label>
       <a class="header-link" href="#guide">${t("guideLink")}</a>
-      <a
-        class="header-link header-github"
-        href="https://github.com/IGNORANZ-PROJECT/BabelBreaker"
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label="${t("githubAria")}"
-      >GitHub ${icon("external", 15)}</a>
+      ${headerProjectLink}
     </nav>
   </header>
 
@@ -163,18 +223,7 @@ document.querySelector("#app").innerHTML = `
           .map((game) => `<span>${game.name}</span>`)
           .join("")}
       </div>
-      <a
-        class="oss-callout"
-        href="https://github.com/IGNORANZ-PROJECT/BabelBreaker"
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        <span>
-          <strong>${t("ossTitle")}</strong>
-          <small>${t("ossCopy")}</small>
-        </span>
-        ${icon("external", 15)}
-      </a>
+      ${projectCallout}
     </section>
 
     <section class="workspace section-wrap" id="workspace" hidden aria-live="polite">
@@ -401,25 +450,7 @@ document.querySelector("#app").innerHTML = `
           <p>${t("externalServicesCopy")}</p>
         </article>
       </div>
-      <div class="oss-panel">
-        <div>
-          <span class="oss-mark">MIT</span>
-          <span>
-            <strong>${t("ossFreedom")}</strong>
-            <small>
-              © 2026
-              <a class="project-link" href="https://ignoranz-project.web.app/" target="_blank" rel="noopener noreferrer" aria-label="${t("projectSiteAria")}">IGNORANZ PROJECT</a>
-            </small>
-          </span>
-        </div>
-        <div class="oss-links">
-          <a href="https://github.com/IGNORANZ-PROJECT/BabelBreaker" target="_blank" rel="noopener noreferrer">
-            ${t("sourceCode")} ${icon("external", 14)}
-          </a>
-          <a href="/LICENSE.txt" target="_blank" rel="noopener">MIT License</a>
-          <a href="/THIRD_PARTY_NOTICES.txt" target="_blank" rel="noopener">${t("thirdParty")}</a>
-        </div>
-      </div>
+      ${ossPanel}
       <p class="legal-note">
         ${t("legalNote")}
       </p>
@@ -428,15 +459,10 @@ document.querySelector("#app").innerHTML = `
 
   <footer>
     <a class="brand footer-brand" href="#home"><img src="/icon-ui.png" width="30" height="30" alt="" /> Babel Breaker</a>
-    <span>
-      © 2026
-      <a class="project-link" href="https://ignoranz-project.web.app/" target="_blank" rel="noopener noreferrer" aria-label="${t("projectSiteAria")}">IGNORANZ PROJECT</a>
-    </span>
+    ${footerProjectInfo}
     <nav class="footer-links" aria-label="${t("footerAria")}">
       <a href="#privacy">${t("privacyLink")}</a>
-      <a href="/LICENSE.txt" target="_blank" rel="noopener">MIT</a>
-      <a href="https://x.com/IGNORANZ_P" target="_blank" rel="noopener noreferrer" aria-label="${t("xAria")}">X ${icon("external", 15)}</a>
-      <a href="https://github.com/IGNORANZ-PROJECT/BabelBreaker" target="_blank" rel="noopener noreferrer">GitHub ${icon("external", 15)}</a>
+      ${footerProjectLinks}
     </nav>
   </footer>
 `;

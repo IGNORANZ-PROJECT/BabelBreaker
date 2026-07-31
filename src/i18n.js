@@ -159,7 +159,7 @@ const rows = {
   troubleshooting: ["If translations do not appear", "翻訳が反映されないとき", "번역이 표시되지 않을 때", "如果翻译未显示", "Si no aparecen las traducciones"],
   reloadResources: ["Press F3 + T to reload resources.", "F3 + T でリソースを再読み込みしてください。", "F3 + T를 눌러 리소스를 다시 불러오세요.", "按 F3 + T 重新加载资源。", "Pulsa F3 + T para recargar los recursos."],
   troubleshootingCopy: ["Place the translation pack above other packs, and verify that the mod and translation versions match.", "翻訳パックをほかのリソースパックより上に置き、MODと翻訳パックのバージョンが合っているか確認してください。", "번역 팩을 다른 팩보다 위에 두고 MOD와 번역 팩 버전이 맞는지 확인하세요.", "将翻译包置于其他资源包上方，并确认 MOD 与翻译包版本匹配。", "Pon el paquete de traducción sobre los demás y comprueba que su versión coincida con la del mod."],
-  privacyOss: ["Privacy & open source", "プライバシーとOSS", "개인정보 및 오픈 소스", "隐私与开源", "Privacidad y código abierto"],
+  privacyOss: ["Privacy", "プライバシー", "개인정보", "隐私", "Privacidad"],
   disclosureTitle: ["Simple, private, and inspectable.", "シンプルな仕組みで、安全に使える。", "단순하고 안전하며 검증 가능합니다.", "简单、私密、可验证。", "Simple, privado y verificable."],
   disclosureCopy: ["We clearly document file handling and network access.", "ファイルの扱いと外部通信について、分かりやすく公開しています。", "파일 처리와 네트워크 통신 방식을 명확히 공개합니다.", "我们清楚说明文件处理和网络访问方式。", "Explicamos claramente cómo se tratan los archivos y el acceso a red."],
   fileProcessing: ["File processing", "ファイル処理", "파일 처리", "文件处理", "Procesamiento de archivos"],
