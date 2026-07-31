@@ -21,6 +21,7 @@ async function read(relativePath) {
 
 test("release metadata identifies the public MIT repository", async () => {
   const packageMetadata = JSON.parse(await read("package.json"));
+  const app = await read("src/app.js");
   assert.equal(packageMetadata.license, "MIT");
   assert.equal(
     packageMetadata.repository.url,
@@ -31,6 +32,9 @@ test("release metadata identifies the public MIT repository", async () => {
     await read("README.md"),
     /https:\/\/github\.com\/IGNORANZ-PROJECT\/BabelBreaker/,
   );
+  assert.match(app, /https:\/\/ignoranz-project\.web\.app\//);
+  assert.match(app, /https:\/\/x\.com\/IGNORANZ_P/);
+  assert.match(app, /rel="noopener noreferrer"/);
 });
 
 test("production models are pinned to an immutable public mirror commit", () => {

@@ -406,7 +406,10 @@ document.querySelector("#app").innerHTML = `
           <span class="oss-mark">MIT</span>
           <span>
             <strong>${t("ossFreedom")}</strong>
-            <small>© 2026 IGNORANZ PROJECT</small>
+            <small>
+              © 2026
+              <a class="project-link" href="https://ignoranz-project.web.app/" target="_blank" rel="noopener noreferrer" aria-label="${t("projectSiteAria")}">IGNORANZ PROJECT</a>
+            </small>
           </span>
         </div>
         <div class="oss-links">
@@ -425,10 +428,14 @@ document.querySelector("#app").innerHTML = `
 
   <footer>
     <a class="brand footer-brand" href="#home"><img src="/icon-ui.png" width="30" height="30" alt="" /> Babel Breaker</a>
-    <span>Open source · MIT License · Browser edition</span>
+    <span>
+      © 2026
+      <a class="project-link" href="https://ignoranz-project.web.app/" target="_blank" rel="noopener noreferrer" aria-label="${t("projectSiteAria")}">IGNORANZ PROJECT</a>
+    </span>
     <nav class="footer-links" aria-label="${t("footerAria")}">
       <a href="#privacy">${t("privacyLink")}</a>
       <a href="/LICENSE.txt" target="_blank" rel="noopener">MIT</a>
+      <a href="https://x.com/IGNORANZ_P" target="_blank" rel="noopener noreferrer" aria-label="${t("xAria")}">X ${icon("external", 15)}</a>
       <a href="https://github.com/IGNORANZ-PROJECT/BabelBreaker" target="_blank" rel="noopener noreferrer">GitHub ${icon("external", 15)}</a>
     </nav>
   </footer>

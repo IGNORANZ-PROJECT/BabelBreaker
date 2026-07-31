@@ -1329,6 +1329,16 @@ kbd {
   color: var(--accent);
 }
 
+.project-link {
+  color: inherit;
+  font: inherit;
+  font-weight: 650;
+}
+
+.project-link:hover {
+  color: var(--accent);
+}
+
 .legal-note {
   margin: 14px 1px 0;
   color: var(--faint);
