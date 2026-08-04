@@ -191,15 +191,19 @@ test("mcaddon containers accept nested Bedrock packs distributed as zip files", 
   );
   translate(project, { "Example Creature": "サンプルの生物" });
   const { zip } = await outputZip(project);
-  const rebuiltResource = await JSZip.loadAsync(await zip.file("ExampleR.zip").async("uint8array"));
-  const rebuiltBehavior = await JSZip.loadAsync(await zip.file("ExampleB.zip").async("uint8array"));
-  assert.match(await rebuiltResource.file("ExampleR/texts/ja_JP.lang").async("string"), /サンプルの生物/);
+  assert.equal(zip.file("ExampleR.zip"), null);
+  assert.equal(zip.file("ExampleB.zip"), null);
+  const rebuiltResource = await JSZip.loadAsync(await zip.file("ExampleR.mcpack").async("uint8array"));
+  const rebuiltBehavior = await JSZip.loadAsync(await zip.file("ExampleB.mcpack").async("uint8array"));
+  assert.equal(rebuiltResource.file("ExampleR/manifest.json"), null);
+  assert.equal(rebuiltBehavior.file("ExampleB/manifest.json"), null);
+  assert.match(await rebuiltResource.file("texts/ja_JP.lang").async("string"), /サンプルの生物/);
   assert.deepEqual(
-    JSON.parse(await rebuiltResource.file("ExampleR/manifest.json").async("string")).header.version,
+    JSON.parse(await rebuiltResource.file("manifest.json").async("string")).header.version,
     [3, 2, 2],
   );
   assert.deepEqual(
-    JSON.parse(await rebuiltBehavior.file("ExampleB/manifest.json").async("string")).dependencies[0].version,
+    JSON.parse(await rebuiltBehavior.file("manifest.json").async("string")).dependencies[0].version,
     [3, 2, 2],
   );
   assert.ok(zip.file("Unrelated.zip"));

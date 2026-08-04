@@ -139,7 +139,7 @@ function validateContainerEntries(entries, maxEntries, maxExpandedBytes) {
   if (expandedBytes > maxExpandedBytes) throw new Error("アーカイブの展開後サイズが大きすぎます。");
 }
 
-async function isBedrockPackContainer(zip) {
+async function bedrockPackRootPrefix(zip) {
   const manifests = Object.values(zip.files).filter(
     (entry) => !entry.dir && /(^|\/)manifest\.json$/i.test(entry.name),
   );
@@ -150,10 +150,10 @@ async function isBedrockPackContainer(zip) {
         .map((module) => module?.type),
     );
     if (["resources", "data", "script", "world_template"].some((type) => moduleTypes.has(type))) {
-      return true;
+      return entry.name.slice(0, -"manifest.json".length);
     }
   }
-  return false;
+  return null;
 }
 
 async function collectContainers(rootZip, detection, maxEntries, maxExpandedBytes) {
@@ -179,13 +179,17 @@ async function collectContainers(rootZip, detection, maxEntries, maxExpandedByte
     }
     const entries = Object.values(zip.files);
     validateContainerEntries(entries, maxEntries, maxExpandedBytes);
-    if (!knownNestedArchive && !(await isBedrockPackContainer(zip))) continue;
+    const nestedBedrockRoot = detection.id === "bedrock_addon"
+      ? await bedrockPackRootPrefix(zip)
+      : null;
+    if (!knownNestedArchive && nestedBedrockRoot === null) continue;
     containers.push({
       id: `nested:${entry.name}`,
       parentId: "root",
       entryPath: entry.name,
       zip,
       sourceBytes: bytes,
+      rootPrefix: nestedBedrockRoot || "",
     });
   }
   return containers;
@@ -603,7 +607,7 @@ async function applyBedrockVersionPlan(zip, containerId, plan, { rootPrefix = ""
       }
     }
     if (changed) {
-      const outputPath = normalizeRoot && containerId === "root" && record.path.startsWith(rootPrefix)
+      const outputPath = normalizeRoot && record.path.startsWith(rootPrefix)
         ? record.path.slice(rootPrefix.length)
         : record.path;
       zip.file(outputPath, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -678,10 +682,13 @@ export async function buildArtifactArchive(project, {
     documentsByContainer.get(document.containerId).push(document);
   }
 
-  const applyDocuments = async (zip, documents) => {
+  const applyDocuments = async (zip, documents, pathPrefix = "") => {
     for (const document of documents || []) {
-      const outputPath = normalizeRoot && document.containerId === "root" && document.outputPath.startsWith(rootPrefix)
-        ? document.outputPath.slice(rootPrefix.length)
+      const prefix = pathPrefix || (
+        normalizeRoot && document.containerId === "root" ? rootPrefix : ""
+      );
+      const outputPath = prefix && document.outputPath.startsWith(prefix)
+        ? document.outputPath.slice(prefix.length)
         : document.outputPath;
       zip.file(outputPath, render(document));
       if (document.format === "bedrock-lang") {
@@ -735,12 +742,30 @@ export async function buildArtifactArchive(project, {
       ),
     );
     if (!childDocuments?.length && !needsManifestUpdate) continue;
-    const child = await JSZip.loadAsync(container.sourceBytes, { createFolders: false });
-    await applyDocuments(child, childDocuments);
-    await applyBedrockVersionPlan(child, container.id, bedrockVersionPlan);
-    const entryPath = normalizeRoot && container.entryPath.startsWith(rootPrefix)
+    let child = await JSZip.loadAsync(container.sourceBytes, { createFolders: false });
+    const childRootPrefix = project.artifactType === "bedrock_addon"
+      ? container.rootPrefix || ""
+      : "";
+    if (childRootPrefix) {
+      const normalizedChild = new JSZip();
+      for (const entry of Object.values(child.files)) {
+        if (entry.dir || !entry.name.startsWith(childRootPrefix)) continue;
+        normalizedChild.file(entry.name.slice(childRootPrefix.length), await entry.async("uint8array"));
+      }
+      child = normalizedChild;
+    }
+    await applyDocuments(child, childDocuments, childRootPrefix);
+    await applyBedrockVersionPlan(child, container.id, bedrockVersionPlan, {
+      rootPrefix: childRootPrefix,
+      normalizeRoot: Boolean(childRootPrefix),
+    });
+    let entryPath = normalizeRoot && container.entryPath.startsWith(rootPrefix)
       ? container.entryPath.slice(rootPrefix.length)
       : container.entryPath;
+    if (project.artifactType === "bedrock_addon" && /\.zip$/i.test(entryPath)) {
+      root.remove(entryPath);
+      entryPath = entryPath.replace(/\.zip$/i, ".mcpack");
+    }
     root.file(entryPath, await child.generateAsync(archiveOptions("uint8array")));
   }
 

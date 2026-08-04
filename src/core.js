@@ -1037,6 +1037,7 @@ async function analyzeDetectedArtifact(
         parentId: container.parentId,
         entryPath: container.entryPath,
         sourceBytes: container.sourceBytes,
+        rootPrefix: container.rootPrefix || "",
       })),
     },
     createdAt: new Date().toISOString(),
