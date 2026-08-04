@@ -4,6 +4,7 @@ import {
   MAX_BATCH_BYTES,
   MAX_BATCH_FILES,
   MINECRAFT_VERSIONS,
+  SUPPORTED_ARTIFACTS,
   SUPPORTED_GAMES,
   analyzeArchive,
   applyClipboardTranslation,
@@ -202,7 +203,7 @@ document.querySelector("#app").innerHTML = `
       </div>
 
       <div class="drop-shell">
-        <input id="mod-file" type="file" accept=".jar,.zip,application/java-archive,application/zip" multiple hidden />
+        <input id="mod-file" type="file" accept=".jar,.zip,.mrpack,.mcpack,.mcaddon,.mcworld,application/java-archive,application/zip" multiple hidden />
         <button class="drop-zone" id="drop-zone" type="button" data-testid="drop-zone">
           <span class="drop-icon">${icon("upload", 30)}</span>
           <strong>${t("dropTitle")}</strong>
@@ -218,10 +219,16 @@ document.querySelector("#app").innerHTML = `
         <span>${icon("shield", 17)} ${t("trustLocal")}</span>
         <span>${icon("jar", 17)} ${t("trustMinecraft")}</span>
       </div>
-      <div class="supported-games" aria-label="${t("supportedGames")}">
-        ${Object.values(SUPPORTED_GAMES)
-          .map((game) => `<span>${game.name}</span>`)
-          .join("")}
+      <div class="supported-formats" aria-label="${t("supportedFormats")}">
+        <div>
+          <strong>${t("javaFormatGroup")}</strong>
+          <span>${t("javaFormatList")}</span>
+        </div>
+        <div>
+          <strong>${t("bedrockFormatGroup")}</strong>
+          <span>${t("bedrockFormatList")}</span>
+        </div>
+        <small>${t("otherGameFormats")}</small>
       </div>
       ${projectCallout}
     </section>
@@ -547,6 +554,15 @@ function formatBytes(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function artifactLabel(project = state.project) {
+  if (!project?.artifactType) return "";
+  return t(`artifact_${project.artifactType}`) || SUPPORTED_ARTIFACTS[project.artifactType]?.label || project.artifactType;
+}
+
+function artifactInstallCopy(project = state.project) {
+  return project?.artifactType ? t(`install_${project.artifactType}`) : "";
+}
+
 function showNotice(message, type = "info") {
   elements.notice.className = `notice ${type}`;
   elements.notice.innerHTML = `${type === "error" ? icon("warning", 18) : icon("check", 18)}<span>${escapeHtml(message)}</span>`;
@@ -556,7 +572,7 @@ function showNotice(message, type = "info") {
 function localizeError(error) {
   const message = String(error?.message || error || "");
   const mappings = [
-    [/MODの \.jar/, "errorInvalidFile"],
+    [/対応する \.jar|MODの \.jar/, "errorInvalidFile"],
     [/512MB/, "errorTooLarge"],
     [/アーカイブを開けませんでした/, "errorOpenArchive"],
     [/アーカイブ内のファイル数/, "errorTooManyEntries"],
@@ -751,6 +767,21 @@ function renderGameGuide(game = "minecraft", instanceBundle = false) {
 
 function outputUiKeys(project) {
   const game = project.game || "minecraft";
+  if (project.artifactType) {
+    const copy = project.artifactType === "modpack"
+      ? "readyModpackCopy"
+      : project.artifactType === "resource_pack" && project.edition === "java"
+        ? "readyResourcePackCopy"
+        : project.artifactType === "server_plugin"
+          ? "readyPluginCopy"
+          : "readyNativeCopy";
+    return {
+      title: "readyNativeTitle",
+      copy,
+      download: "downloadNative",
+      success: "downloadNativeSuccess",
+    };
+  }
   if (game === "minecraft" && project.requiresInstanceInstall) {
     return {
       title: "readyBundleTitle",
@@ -811,13 +842,21 @@ function renderProject({ scroll = true } = {}) {
       })
     : `${project.fileName} · ${formatBytes(project.fileSize)}`;
   elements["file-name"].title = project.fileNames?.join("\n") || project.fileName;
-  elements["mod-name"].textContent = project.isBatch
-    ? t("batchModName", { count: project.mods.length })
-    : project.mod.name;
+  elements["mod-name"].textContent = project.artifactBatch
+    ? artifactLabel(project)
+    : project.isBatch
+      ? t("batchModName", { count: project.mods.length })
+      : project.artifactType
+      ? artifactLabel(project)
+      : project.mod.name;
   elements["mod-tags"].innerHTML = [
     ...new Set(
       [
-        SUPPORTED_GAMES[project.game || "minecraft"]?.name,
+        project.artifactType
+          ? t("detectedArtifact", { format: artifactLabel(project) })
+          : SUPPORTED_GAMES[project.game || "minecraft"]?.name,
+        project.edition ? `Minecraft ${project.edition === "java" ? "Java" : "Bedrock"}` : "",
+        project.artifact?.variant || "",
         project.mod.loader,
         project.mod.version !== "unknown" && project.mod.version !== "batch"
           ? `v${project.mod.version}`
@@ -825,13 +864,33 @@ function renderProject({ scroll = true } = {}) {
         t("languageFileCount", {
           count: stats.namespaces.toLocaleString(numberLocale),
         }),
-        t("detectedLanguageRoute", {
-          source: sourceLanguageSummary(),
-          target: currentTarget().nativeName,
-        }),
-        ...(project.contentKinds || []).map(
-          (kind) => CONTENT_KIND_LABELS[kind] || kind,
-        ),
+        project.coverage
+          ? t("artifactCoverage", {
+              documents: project.coverage.documents.toLocaleString(numberLocale),
+              containers: project.coverage.containers.toLocaleString(numberLocale),
+            })
+          : "",
+        project.coverage?.missingReferences
+          ? t("missingReferences", {
+              count: project.coverage.missingReferences.toLocaleString(numberLocale),
+            })
+          : "",
+        project.coverage?.suppliedLocalMods
+          ? t("suppliedLocalMods", {
+              count: project.coverage.suppliedLocalMods.toLocaleString(numberLocale),
+            })
+          : "",
+        sourceLanguageSummary()
+          ? t("detectedLanguageRoute", {
+              source: sourceLanguageSummary(),
+              target: currentTarget().nativeName,
+            })
+          : "",
+        ...(project.artifactType
+          ? []
+          : (project.contentKinds || []).map(
+              (kind) => CONTENT_KIND_LABELS[kind] || kind,
+            )),
       ].filter(Boolean),
     ),
   ]
@@ -839,22 +898,31 @@ function renderProject({ scroll = true } = {}) {
     .join("");
   updateProjectSummary();
   const isMinecraft = (project.game || "minecraft") === "minecraft";
-  elements["minecraft-settings"].hidden = !isMinecraft;
-  if (isMinecraft) elements["minecraft-version"].value = project.minecraftVersion;
+  const usesJavaPackVersion = isMinecraft && project.edition !== "bedrock" && project.artifactType !== "server_plugin";
+  elements["minecraft-settings"].hidden = !usesJavaPackVersion;
+  if (usesJavaPackVersion) elements["minecraft-version"].value = project.minecraftVersion;
   const outputCopy = outputUiKeys(project);
   elements["ready-title"].textContent = t(outputCopy.title);
   elements["ready-copy"].textContent = t(outputCopy.copy);
   elements["download-label"].textContent = t(outputCopy.download);
+  elements["start-button"].disabled = stats.total === 0;
+  elements["download-button"].disabled = stats.total === 0;
   renderGameGuide(
     project.game || "minecraft",
     Boolean(project.requiresInstanceInstall),
   );
+  if (project.artifactType) {
+    elements["guide-title"].textContent = `${artifactLabel(project)} · ${t("guideLink")}`;
+    elements["guide-copy"].textContent = artifactInstallCopy(project);
+  }
   elements["review-panel"].hidden = true;
   elements["clipboard-panel"].hidden = true;
   elements["progress-panel"].hidden = true;
   updateAvailability();
   const unsupportedLocales = pendingUnsupportedSourceLocales();
-  if (unsupportedLocales.length) {
+  if (stats.total === 0) {
+    showNotice(t("noTranslatableContent"), "warning");
+  } else if (unsupportedLocales.length) {
     showNotice(
       t("localUnsupportedSource", { locales: unsupportedLocales.join(", ") }),
       "warning",
@@ -1201,7 +1269,7 @@ async function downloadPack() {
   setBusy(true);
   clearNotice();
   try {
-    if ((state.project.game || "minecraft") === "minecraft") {
+    if ((state.project.game || "minecraft") === "minecraft" && state.project.edition !== "bedrock") {
       state.project.minecraftVersion = elements["minecraft-version"].value;
     }
     const { archive, filename } = await buildResourcePack(

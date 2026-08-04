@@ -2,15 +2,20 @@
 
 [日本語](README.md)
 
-Babel Breaker is an open-source browser tool that detects and translates text from Minecraft, Factorio, Stardew Valley, and RimWorld mods or modpacks into eleven target languages.
+Babel Breaker is an open-source browser tool that detects and translates text from Minecraft, Factorio, Stardew Valley, and RimWorld game files into eleven target languages.
 
 The mod archive, extracted text, glossary, translation, and generated ZIP stay in the user's browser. There is no application backend, account, or API key.
 
 ## Features
 
-- Drag and drop one or multiple `.jar` or `.zip` mod files
+- Drag and drop one or multiple `.jar`, `.zip`, `.mrpack`, `.mcpack`, `.mcaddon`, or `.mcworld` files
 - Auto-detect the game and supported language-file format
   - Minecraft Java Edition `.json` / `.lang`
+  - Modrinth, CurseForge, and instance modpacks, with optional local JARs for referenced files not included in the export
+  - Java worlds with nested `resources.zip` and known sign, book, and display-name text in Anvil regions
+  - Bedrock Add-ons, worlds, and resource packs with `.lang`, `languages.json`, and manifest dependency handling
+  - Known visible JSON and `.mcfunction` text in data packs
+  - External JSON, YAML, and properties locale patches for server plugins without rewriting the plugin JAR
   - Patchouli resource-pack guidebook category, entry, and template JSON
   - FTB Quests 1.21 locale SNBT plus visible fields in legacy SNBT and binary NBT
   - Names and descriptions in legacy Better Questing JSON
@@ -25,7 +30,7 @@ The mod archive, extracted text, glossary, translation, and generated ZIP stay i
 - Target English, Japanese, Korean, Simplified Chinese, Traditional Chinese, German, Spanish, French, Brazilian Portuguese, Russian, or Italian
 - Switch the interface between Japanese, English, Korean, Simplified Chinese, and Spanish
 - Default the target language to the selected interface language
-- Preserve Minecraft placeholders, named quest substitutions, Patchouli `$(...)` formatting, color codes, line breaks, and URLs
+- Preserve printf and plugin placeholders, MiniMessage tags, named quest substitutions, Patchouli `$(...)` formatting, color codes, line breaks, and URLs
 - Reuse existing translations for the selected locale
 - Review and edit every translation in the browser
 - Show machine-translated entries under Needs review by default
@@ -70,6 +75,10 @@ The production site is generated under `dist/`.
 
 ## Minecraft extended-format scope
 
+- Modpacks scan included JARs and can use separately selected local JARs to cover referenced files missing from an export. Original MOD JARs are not modified; a translation resource pack is added.
+- Java worlds translate known sign, book, and display-name fields in standard Anvil region chunks. External chunks are preserved, and the region location table is rebuilt after text-size changes.
+- Bedrock Add-ons and resource packs retain UUIDs while updating changed manifest patch versions and dependency versions. Bedrock World LevelDB data is preserved unchanged; only accessible embedded language resources are translated.
+- Data packs and server plugins restrict extraction to known visible fields. Command identifiers and plugin JARs are not rewritten.
 - Patchouli support targets resource-pack books under `assets/<namespace>/patchouli_books/<book>/<locale>/`.
 - FTB Quests 1.21 locale files under `config/ftbquests/quests/lang/<locale>.snbt` reuse existing target translations. Legacy quest SNBT and binary NBT extract fields such as `title`, `subtitle`, and `description`.
 - Better Questing support extracts fields such as `name`, `desc`, and `description` from quest JSON under `config/betterquesting`.

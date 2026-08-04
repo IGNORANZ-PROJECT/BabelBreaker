@@ -253,22 +253,40 @@ a {
   background: var(--page);
 }
 
-.supported-games {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 7px;
-  margin-top: 14px;
+.supported-formats {
+  display: grid;
+  width: min(100%, 760px);
+  margin: 18px auto 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  text-align: left;
 }
 
-.supported-games span {
-  padding: 6px 10px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface);
+.supported-formats > div {
+  display: grid;
+  grid-template-columns: 145px minmax(0, 1fr);
+  gap: 18px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.supported-formats strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.supported-formats span,
+.supported-formats small {
   color: var(--muted);
-  font-size: 10px;
-  font-weight: 650;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.supported-formats > small {
+  padding: 10px 16px;
+  text-align: center;
 }
 
 #minecraft-settings {
@@ -1428,6 +1446,11 @@ footer {
 }
 
 @media (max-width: 620px) {
+  .supported-formats > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
   .site-header {
     height: 60px;
     padding: 0 16px;

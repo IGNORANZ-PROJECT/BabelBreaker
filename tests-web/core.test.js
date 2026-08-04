@@ -84,6 +84,20 @@ test("placeholder validation protects Minecraft formatting", () => {
   assert.equal(placeholdersMatch("Hello %s", "こんにちは"), false);
 });
 
+test("placeholder validation protects common server plugin markup", () => {
+  const source = "<green>Hello %player%</green> &lRank {0,number} {user_name}";
+  assert.deepEqual(extractPlaceholderTokens(source), [
+    "%player%",
+    "&l",
+    "</green>",
+    "<green>",
+    "{0,number}",
+    "{user_name}",
+  ]);
+  assert.equal(placeholdersMatch(source, "<green>ようこそ %player%</green> &lランク {0,number} {user_name}"), true);
+  assert.equal(placeholdersMatch(source, "<green>ようこそ</green> &lランク {0,number} {user_name}"), false);
+});
+
 test("JAR analysis discovers metadata, multiple namespaces, and existing Japanese", async () => {
   const file = await makeModFile({
     files: {

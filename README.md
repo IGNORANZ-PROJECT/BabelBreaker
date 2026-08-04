@@ -2,15 +2,20 @@
 
 [English](README.en.md)
 
-Minecraft、Factorio、Stardew Valley、RimWorldのMODやMODパックから翻訳対象と原文言語を自動判定し、11言語へ翻訳して導入用ZIPを作るブラウザアプリです。
+Minecraft、Factorio、Stardew Valley、RimWorldのゲームファイルから翻訳対象と原文言語を自動判定し、11言語へ翻訳して導入用ファイルを作るブラウザアプリです。
 
 JAR の解析、翻訳、ZIP 生成はすべてユーザーのブラウザ内で行われます。MOD や翻訳内容をサーバーへアップロードしません。
 
 ## 新しいブラウザ版
 
-- 1件または複数の `.jar` / `.zip` をドラッグ＆ドロップ
+- 1件または複数の `.jar` / `.zip` / `.mrpack` / `.mcpack` / `.mcaddon` / `.mcworld` をドラッグ＆ドロップ
 - 対応ゲームと形式を自動判定
   - Minecraft Java Edition: `.json` / `.lang`、Fabric / Forge / NeoForge / Quilt
+  - Minecraft ModPack: Modrinth、CurseForge、インスタンスZIP。同梱されていないMODはローカルJARの同時選択で補完
+  - Java配布ワールド: `resources.zip`と、Anvil region内にある既知形式の看板・本・表示名
+  - Bedrock: Add-on、World、リソースパックの`.lang`、`languages.json`、manifest依存関係
+  - データパック: advancementなど既知のJSON表示文と`.mcfunction`内のJSONテキスト
+  - サーバープラグイン: 外部言語JSON / YAML / propertiesを、JARを書き換えない翻訳パッチとして出力
   - Patchouli: リソースパック型ガイドブックのcategories / entries / templates JSON
   - FTB Quests: 1.21系のロケールSNBTと、旧形式SNBT／バイナリNBT内のタイトル・説明
   - Better Questing: 旧形式のクエストJSON内にある名称・説明
@@ -29,7 +34,7 @@ JAR の解析、翻訳、ZIP 生成はすべてユーザーのブラウザ内で
 - UI言語に合わせて翻訳先を初期選択
 - 非対応環境・任意の外部ツール向けのコピー翻訳
 - 外部翻訳用の原文JSON保存と、翻訳済みJSON / TXTの読込・ドロップ
-- `%s`、`%1$d`、`{0}`、`{team}`、`§a`、Patchouliの`$(...)`、改行、URL の保護
+- `%s`、`%1$d`、`%player%`、`{0}`、`{team}`、MiniMessageタグ、`§a`、Patchouliの`$(...)`、改行、URL の保護
 - 選択言語の既存lang（`ja_jp`、`de_de` など）を再利用し、不足分だけ翻訳
 - 翻訳内容をブラウザ上で確認・修正
 - 機械翻訳した項目を「要確認」として初期表示
@@ -97,7 +102,7 @@ Firebase SDK は使用していません。Hosting はアプリの静的ファ�
 
 ## 基本フロー
 
-1. 1件または複数の MOD JAR / ZIP、またはMODパックZIPをドロップ
+1. 1件または複数の対応ファイルをドロップ
 2. 自動検出されたゲーム・MOD・原文言語を確認
 3. 「この端末で翻訳」または「外部ツールで翻訳」を選択
    - 外部ツール方式では依頼文をコピーするか、原文JSONを保存
@@ -123,6 +128,8 @@ BabelBreaker/
 ├─ src/
 │  ├─ app.js          # UI と操作フロー
 │  ├─ core.js         # 対応ゲーム判定・翻訳保護・ZIP生成
+│  ├─ artifact-formats.js # ModPack・World・Add-on・各種パックの解析と出力
+│  ├─ java-world.js        # Anvil region内の既知NBT文章と安全な再構築
 │  ├─ minecraft-content.js # Patchouli・クエスト形式の解析と安全な再構築
 │  ├─ nbt.js               # Java Edition NBTの型保持・圧縮・展開
 │  ├─ i18n.js         # UIの5言語表示
@@ -141,6 +148,10 @@ Firebase で公開されるのは、ビルドで生成される `dist/` のみ�
 
 ### Minecraft拡張形式の範囲
 
+- ModPackでは同梱JARを解析し、不足している索引参照ファイルはユーザーが同時選択したローカルJARで補います。元のMOD JARは変更せず、翻訳リソースパックを追加します。
+- Java配布ワールドでは通常のregionファイル内にある既知形式の看板・本・表示名を対象にします。外部チャンクは変更せず、翻訳後はチャンク位置テーブルを再計算します。
+- Bedrock Add-on／リソースパックではUUIDを維持して変更対象manifestのパッチバージョンと依存バージョンを更新します。Bedrock WorldのLevelDB内部は変更せず、埋め込みリソースの言語ファイルだけを対象にします。
+- データパックとサーバープラグインは既知の表示文字列だけを対象にし、コマンド識別子やプラグインJAR本体は変更しません。
 - Patchouliは`assets/<namespace>/patchouli_books/<book>/<locale>/`にある、リソースパックから上書き可能な書籍本文を対象にします。
 - FTB Quests 1.21系は`config/ftbquests/quests/lang/<locale>.snbt`を対象にし、既存の翻訳があれば再利用します。旧形式ではクエストSNBTまたはバイナリNBT内の`title`、`subtitle`、`description`などを対象にします。
 - Better Questingは`config/betterquesting`内のクエストJSONから`name`、`desc`、`description`などを抽出します。

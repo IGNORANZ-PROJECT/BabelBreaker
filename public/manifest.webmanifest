@@ -1,7 +1,7 @@
 {
   "name": "Babel Breaker",
   "short_name": "Babel Breaker",
-  "description": "Translate game mods locally in your browser without uploading them",
+  "description": "Translate mods, modpacks, worlds, Add-ons, and game packs locally in your browser",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f6f7f8",

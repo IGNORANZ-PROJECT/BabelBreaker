@@ -1,6 +1,6 @@
 # Privacy
 
-Babel Breaker is designed to process game MOD translation data locally in the user's browser. The current release supports Minecraft, Factorio, Stardew Valley Content Patcher, and RimWorld language-file formats.
+Babel Breaker is designed to process game translation data locally in the user's browser. The current release supports Minecraft mods, modpacks, Java and Bedrock worlds, Add-ons, resource packs, data packs, server-plugin locale files, Factorio, Stardew Valley Content Patcher, and RimWorld language-file formats.
 
 ## Data the application does not collect
 
@@ -15,6 +15,8 @@ Babel Breaker is designed to process game MOD translation data locally in the us
 The browser version does not include an application backend.
 
 For Factorio and Stardew Valley, the browser copies the selected original archive and adds the translated language files to create a replacement mod. For RimWorld, it creates a separate translation mod without copying the original mod. Both operations happen locally; generated archives are not uploaded or retained by Babel Breaker.
+
+Bedrock World LevelDB data and unsupported Java external chunks are preserved without inspection or modification. Server plugin output is a separate locale patch and does not contain or rewrite plugin classes.
 
 ## Local translation model
 

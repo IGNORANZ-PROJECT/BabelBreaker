@@ -33,3 +33,7 @@ Please include:
 - Firebase production builds exclude model binaries; CSP permits model downloads only from the selected Hugging Face delivery hosts.
 - Non-English translation pivots through English entirely inside local WebAssembly workers.
 - Untrusted archives are subject to path, entry-count, format, namespace, and decompressed-size validation.
+- Nested archives and Java region chunks have separate depth, count, compressed-ratio, and expanded-byte limits.
+- Java regions are rebuilt from parsed chunks instead of using in-place byte replacement; unsupported external chunks are preserved.
+- Bedrock pack UUIDs are retained, dependency versions are updated together, and Bedrock World LevelDB data is not rewritten.
+- Server plugin JARs are never rewritten; output contains locale patch files only.
