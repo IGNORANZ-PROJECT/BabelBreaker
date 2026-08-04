@@ -61,12 +61,24 @@ const state = {
   visibleEntries: 100,
   abortController: null,
   busy: false,
+  guideGame: "minecraft",
+  minecraftGuideMode: "javaMod",
 };
 const CONTENT_KIND_LABELS = {
   patchouli: "Patchouli",
   ftbquests: "FTB Quests",
   betterquesting: "Better Questing",
 };
+const MINECRAFT_GUIDES = [
+  { id: "javaMod", label: "minecraftGuideJavaMod", prefix: "guide" },
+  { id: "modpack", label: "minecraftGuideModpack", prefix: "modpackGuide" },
+  { id: "javaWorld", label: "minecraftGuideJavaWorld", prefix: "javaWorldGuide" },
+  { id: "javaResourcePack", label: "minecraftGuideJavaResourcePack", prefix: "javaResourcePackGuide" },
+  { id: "dataPack", label: "minecraftGuideDataPack", prefix: "dataPackGuide" },
+  { id: "serverPlugin", label: "minecraftGuideServerPlugin", prefix: "serverPluginGuide" },
+  { id: "bedrockAddon", label: "minecraftGuideBedrockAddon", prefix: "bedrockAddonGuide" },
+  { id: "bedrockWorld", label: "minecraftGuideBedrockWorld", prefix: "bedrockWorldGuide" },
+];
 
 const icon = (name, size = 20) => {
   const paths = {
@@ -228,7 +240,18 @@ document.querySelector("#app").innerHTML = `
           <strong>${t("bedrockFormatGroup")}</strong>
           <span>${t("bedrockFormatList")}</span>
         </div>
-        <small>${t("otherGameFormats")}</small>
+        <div>
+          <strong>${t("factorioFormatGroup")}</strong>
+          <span>${t("factorioFormatList")}</span>
+        </div>
+        <div>
+          <strong>${t("stardewFormatGroup")}</strong>
+          <span>${t("stardewFormatList")}</span>
+        </div>
+        <div>
+          <strong>${t("rimworldFormatGroup")}</strong>
+          <span>${t("rimworldFormatList")}</span>
+        </div>
       </div>
       ${projectCallout}
     </section>
@@ -406,6 +429,12 @@ document.querySelector("#app").innerHTML = `
           )
           .join("")}
       </div>
+      <div class="minecraft-guide-tabs" id="minecraft-guide-tabs" role="tablist" aria-label="${t("minecraftGuideFormats")}">
+        ${MINECRAFT_GUIDES.map(
+          (guide, index) =>
+            `<button type="button" role="tab" data-minecraft-guide="${guide.id}" aria-selected="${index === 0}">${t(guide.label)}</button>`,
+        ).join("")}
+      </div>
       <div class="guide-heading">
         <span class="step-label" id="guide-step">${t("guideStep")}</span>
         <h2 id="guide-title">${t("guideTitle")}</h2>
@@ -524,6 +553,7 @@ const elements = Object.fromEntries(
     "download-button",
     "download-label",
     "guide-step",
+    "minecraft-guide-tabs",
     "guide-title",
     "guide-copy",
     "guide-1-title",
@@ -557,10 +587,6 @@ function formatBytes(bytes) {
 function artifactLabel(project = state.project) {
   if (!project?.artifactType) return "";
   return t(`artifact_${project.artifactType}`) || SUPPORTED_ARTIFACTS[project.artifactType]?.label || project.artifactType;
-}
-
-function artifactInstallCopy(project = state.project) {
-  return project?.artifactType ? t(`install_${project.artifactType}`) : "";
 }
 
 function showNotice(message, type = "info") {
@@ -737,13 +763,11 @@ function updateProjectSummary() {
   updateStartLabel();
 }
 
-function renderGameGuide(game = "minecraft", instanceBundle = false) {
-  const prefix =
-    game === "minecraft" && instanceBundle
-      ? "minecraftBundleGuide"
-      : game === "minecraft"
-        ? "guide"
-        : `${game}Guide`;
+function renderGameGuide(game = state.guideGame || "minecraft", minecraftMode = state.minecraftGuideMode || "javaMod") {
+  state.guideGame = game;
+  if (game === "minecraft") state.minecraftGuideMode = minecraftMode;
+  const selectedMinecraftGuide = MINECRAFT_GUIDES.find((guide) => guide.id === state.minecraftGuideMode) || MINECRAFT_GUIDES[0];
+  const prefix = game === "minecraft" ? selectedMinecraftGuide.prefix : `${game}Guide`;
   for (const [id, suffix] of [
     ["guide-step", "Step"],
     ["guide-title", "Title"],
@@ -762,7 +786,25 @@ function renderGameGuide(game = "minecraft", instanceBundle = false) {
     button.classList.toggle("selected", selected);
     button.setAttribute("aria-selected", String(selected));
   });
-  elements["minecraft-troubleshooting"].hidden = game !== "minecraft";
+  elements["minecraft-guide-tabs"].hidden = game !== "minecraft";
+  document.querySelectorAll("[data-minecraft-guide]").forEach((button) => {
+    const selected = button.dataset.minecraftGuide === state.minecraftGuideMode;
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-selected", String(selected));
+  });
+  elements["minecraft-troubleshooting"].hidden = game !== "minecraft" || !["javaMod", "javaResourcePack"].includes(state.minecraftGuideMode);
+}
+
+function guideModeForProject(project) {
+  if (!project || (project.game || "minecraft") !== "minecraft") return "javaMod";
+  if (project.artifactType === "modpack") return "modpack";
+  if (project.artifactType === "java_world") return "javaWorld";
+  if (project.artifactType === "data_pack") return "dataPack";
+  if (project.artifactType === "server_plugin") return "serverPlugin";
+  if (project.artifactType === "bedrock_world") return "bedrockWorld";
+  if (project.artifactType === "bedrock_addon" || project.edition === "bedrock") return "bedrockAddon";
+  if (project.artifactType === "resource_pack") return "javaResourcePack";
+  return "javaMod";
 }
 
 function outputUiKeys(project) {
@@ -907,14 +949,7 @@ function renderProject({ scroll = true } = {}) {
   elements["download-label"].textContent = t(outputCopy.download);
   elements["start-button"].disabled = stats.total === 0;
   elements["download-button"].disabled = stats.total === 0;
-  renderGameGuide(
-    project.game || "minecraft",
-    Boolean(project.requiresInstanceInstall),
-  );
-  if (project.artifactType) {
-    elements["guide-title"].textContent = `${artifactLabel(project)} · ${t("guideLink")}`;
-    elements["guide-copy"].textContent = artifactInstallCopy(project);
-  }
+  renderGameGuide(project.game || "minecraft", guideModeForProject(project));
   elements["review-panel"].hidden = true;
   elements["clipboard-panel"].hidden = true;
   elements["progress-panel"].hidden = true;
@@ -1312,7 +1347,7 @@ function resetWorkspace() {
   if (state.translatorStatus.supported) selectMode("local");
   elements["minecraft-settings"].hidden = false;
   elements["download-label"].textContent = t("downloadPack");
-  renderGameGuide();
+  renderGameGuide("minecraft", "javaMod");
   updateAvailability();
   document.querySelector("#home").scrollIntoView({ behavior: "smooth" });
 }
@@ -1340,6 +1375,9 @@ elements["target-language"].addEventListener("change", async (event) => {
 });
 document.querySelectorAll("[data-guide-game]").forEach((button) => {
   button.addEventListener("click", () => renderGameGuide(button.dataset.guideGame));
+});
+document.querySelectorAll("[data-minecraft-guide]").forEach((button) => {
+  button.addEventListener("click", () => renderGameGuide("minecraft", button.dataset.minecraftGuide));
 });
 elements["mod-file"].addEventListener("change", () => {
   const files = elements["mod-file"].files;

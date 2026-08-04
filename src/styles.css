@@ -272,21 +272,19 @@ a {
   border-bottom: 1px solid var(--line);
 }
 
+.supported-formats > div:last-child {
+  border-bottom: 0;
+}
+
 .supported-formats strong {
   color: var(--text);
   font-size: 12px;
 }
 
-.supported-formats span,
-.supported-formats small {
+.supported-formats span {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.55;
-}
-
-.supported-formats > small {
-  padding: 10px 16px;
-  text-align: center;
 }
 
 #minecraft-settings {
@@ -1163,6 +1161,39 @@ select {
   background: var(--accent-soft);
 }
 
+.minecraft-guide-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -12px 0 34px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--page);
+}
+
+.minecraft-guide-tabs[hidden] {
+  display: none;
+}
+
+.minecraft-guide-tabs button {
+  padding: 8px 11px;
+  cursor: pointer;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.minecraft-guide-tabs button:hover,
+.minecraft-guide-tabs button.selected {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgb(25 31 42 / 8%);
+}
+
 .guide-heading,
 .privacy-heading {
   max-width: 650px;
@@ -1530,6 +1561,11 @@ footer {
   .privacy-disclosure {
     padding-top: 60px;
     padding-bottom: 64px;
+  }
+
+  .guide-heading h2 {
+    font-size: 25px;
+    line-height: 1.35;
   }
 
   .section-heading {
