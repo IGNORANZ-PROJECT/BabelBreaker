@@ -157,6 +157,54 @@ test("mcaddon containers rebuild their nested packs", async () => {
   assert.match(await rebuilt.file("texts/ja_JP.lang").async("string"), /サンプルの生物/);
 });
 
+test("mcaddon containers accept nested Bedrock packs distributed as zip files", async () => {
+  const resourceUuid = "55555555-5555-5555-5555-555555555555";
+  const resource = new JSZip();
+  resource.file("ExampleR/manifest.json", JSON.stringify({
+    format_version: 2,
+    header: { name: "Resource", uuid: resourceUuid, version: [3, 2, 1] },
+    modules: [{ type: "resources", uuid: "66666666-6666-6666-6666-666666666666", version: [1, 0, 0] }],
+  }));
+  resource.file("ExampleR/texts/languages.json", JSON.stringify(["en_US"]));
+  resource.file("ExampleR/texts/en_US.lang", "entity.example.name=Example Creature\n");
+  const behavior = new JSZip();
+  behavior.file("ExampleB/manifest.json", JSON.stringify({
+    format_version: 2,
+    header: { name: "Behavior", uuid: "77777777-7777-7777-7777-777777777777", version: [3, 2, 1] },
+    modules: [{ type: "data", uuid: "88888888-8888-8888-8888-888888888888", version: [1, 0, 0] }],
+    dependencies: [{ uuid: resourceUuid, version: [3, 2, 1] }],
+  }));
+  const unrelated = new JSZip();
+  unrelated.file("notes/readme.txt", "This is not a Bedrock pack.");
+  const file = await archiveFile("Zipped.mcaddon", {
+    "ExampleR.zip": await resource.generateAsync({ type: "uint8array" }),
+    "ExampleB.zip": await behavior.generateAsync({ type: "uint8array" }),
+    "Unrelated.zip": await unrelated.generateAsync({ type: "uint8array" }),
+  });
+
+  const project = await analyzeArchive(file);
+  assert.equal(project.artifactType, "bedrock_addon");
+  assert.equal(project.entries.length, 1);
+  assert.deepEqual(
+    project.artifactState.containers.map((container) => container.entryPath).filter(Boolean).sort(),
+    ["ExampleB.zip", "ExampleR.zip"],
+  );
+  translate(project, { "Example Creature": "サンプルの生物" });
+  const { zip } = await outputZip(project);
+  const rebuiltResource = await JSZip.loadAsync(await zip.file("ExampleR.zip").async("uint8array"));
+  const rebuiltBehavior = await JSZip.loadAsync(await zip.file("ExampleB.zip").async("uint8array"));
+  assert.match(await rebuiltResource.file("ExampleR/texts/ja_JP.lang").async("string"), /サンプルの生物/);
+  assert.deepEqual(
+    JSON.parse(await rebuiltResource.file("ExampleR/manifest.json").async("string")).header.version,
+    [3, 2, 2],
+  );
+  assert.deepEqual(
+    JSON.parse(await rebuiltBehavior.file("ExampleB/manifest.json").async("string")).dependencies[0].version,
+    [3, 2, 2],
+  );
+  assert.ok(zip.file("Unrelated.zip"));
+});
+
 test("mcaddon versions and UUID dependencies stay consistent after a pack changes", async () => {
   const resourceUuid = "11111111-1111-1111-1111-111111111111";
   const behaviorUuid = "33333333-3333-3333-3333-333333333333";

@@ -139,6 +139,23 @@ function validateContainerEntries(entries, maxEntries, maxExpandedBytes) {
   if (expandedBytes > maxExpandedBytes) throw new Error("アーカイブの展開後サイズが大きすぎます。");
 }
 
+async function isBedrockPackContainer(zip) {
+  const manifests = Object.values(zip.files).filter(
+    (entry) => !entry.dir && /(^|\/)manifest\.json$/i.test(entry.name),
+  );
+  for (const entry of manifests) {
+    const manifest = await readJson(entry);
+    const moduleTypes = new Set(
+      (Array.isArray(manifest?.modules) ? manifest.modules : [])
+        .map((module) => module?.type),
+    );
+    if (["resources", "data", "script", "world_template"].some((type) => moduleTypes.has(type))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function collectContainers(rootZip, detection, maxEntries, maxExpandedBytes) {
   const containers = [{ id: "root", parentId: null, entryPath: "", zip: rootZip }];
   const rootEntries = Object.values(rootZip.files);
@@ -147,7 +164,10 @@ async function collectContainers(rootZip, detection, maxEntries, maxExpandedByte
   if (!allowNested) return containers;
 
   for (const entry of rootEntries) {
-    if (entry.dir || !NESTED_ARCHIVE_PATH.test(entry.name)) continue;
+    if (entry.dir) continue;
+    const knownNestedArchive = NESTED_ARCHIVE_PATH.test(entry.name);
+    const bedrockZipCandidate = detection.id === "bedrock_addon" && /(?:^|\/)[^/]+\.zip$/i.test(entry.name);
+    if (!knownNestedArchive && !bedrockZipCandidate) continue;
     let bytes;
     let zip;
     try {
@@ -159,6 +179,7 @@ async function collectContainers(rootZip, detection, maxEntries, maxExpandedByte
     }
     const entries = Object.values(zip.files);
     validateContainerEntries(entries, maxEntries, maxExpandedBytes);
+    if (!knownNestedArchive && !(await isBedrockPackContainer(zip))) continue;
     containers.push({
       id: `nested:${entry.name}`,
       parentId: "root",
