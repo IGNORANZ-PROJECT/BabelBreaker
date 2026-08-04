@@ -84,6 +84,7 @@ for (const [installPath, metadata] of productionPackages) {
     (await readLicense(packageDirectory)) ||
     (await readSpdxLicense(metadata.license))
   )
+    .replace(/\r\n?/g, "\n")
     .replace(/[ \t]+$/gm, "")
     .trim();
   if (!licenseText) {

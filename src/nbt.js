@@ -117,12 +117,30 @@ function encodeModifiedUtf8(value) {
   return new Uint8Array(output);
 }
 
+function decodeUtf8(bytes) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("NBT文字列のUTF-8が不正です。");
+  }
+}
+
+function encodeUtf8(value) {
+  const output = new TextEncoder().encode(String(value));
+  if (output.length > 0xffff) {
+    throw new Error("NBT文字列が65535バイトを超えています。");
+  }
+  return output;
+}
+
 class NbtReader {
-  constructor(bytes) {
+  constructor(bytes, { littleEndian = false, stringEncoding = "modified-utf8" } = {}) {
     this.bytes = bytes;
     this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     this.offset = 0;
     this.items = 0;
+    this.littleEndian = littleEndian;
+    this.stringEncoding = stringEncoding;
   }
 
   ensure(length) {
@@ -143,42 +161,42 @@ class NbtReader {
 
   readShort() {
     this.ensure(2);
-    const value = this.view.getInt16(this.offset, false);
+    const value = this.view.getInt16(this.offset, this.littleEndian);
     this.offset += 2;
     return value;
   }
 
   readUnsignedShort() {
     this.ensure(2);
-    const value = this.view.getUint16(this.offset, false);
+    const value = this.view.getUint16(this.offset, this.littleEndian);
     this.offset += 2;
     return value;
   }
 
   readInt() {
     this.ensure(4);
-    const value = this.view.getInt32(this.offset, false);
+    const value = this.view.getInt32(this.offset, this.littleEndian);
     this.offset += 4;
     return value;
   }
 
   readLong() {
     this.ensure(8);
-    const value = this.view.getBigInt64(this.offset, false);
+    const value = this.view.getBigInt64(this.offset, this.littleEndian);
     this.offset += 8;
     return value;
   }
 
   readFloat() {
     this.ensure(4);
-    const value = this.view.getFloat32(this.offset, false);
+    const value = this.view.getFloat32(this.offset, this.littleEndian);
     this.offset += 4;
     return value;
   }
 
   readDouble() {
     this.ensure(8);
-    const value = this.view.getFloat64(this.offset, false);
+    const value = this.view.getFloat64(this.offset, this.littleEndian);
     this.offset += 8;
     return value;
   }
@@ -186,9 +204,10 @@ class NbtReader {
   readString() {
     const length = this.readUnsignedShort();
     this.ensure(length);
-    const value = decodeModifiedUtf8(
-      this.bytes.subarray(this.offset, this.offset + length),
-    );
+    const encoded = this.bytes.subarray(this.offset, this.offset + length);
+    const value = this.stringEncoding === "utf8"
+      ? decodeUtf8(encoded)
+      : decodeModifiedUtf8(encoded);
     this.offset += length;
     return value;
   }
@@ -293,7 +312,7 @@ class NbtReader {
     }
   }
 
-  readRoot() {
+  readRoot({ allowTrailing = false } = {}) {
     const type = this.readUnsignedByte();
     if (type !== NBT_TAG.COMPOUND) {
       throw new Error("NBTのルートがTAG_Compoundではありません。");
@@ -304,7 +323,7 @@ class NbtReader {
       name,
       value: this.readPayload(type, 0),
     };
-    if (this.offset !== this.bytes.length) {
+    if (!allowTrailing && this.offset !== this.bytes.length) {
       throw new Error("NBTの末尾に余分なデータがあります。");
     }
     return root;
@@ -312,10 +331,12 @@ class NbtReader {
 }
 
 class NbtWriter {
-  constructor() {
+  constructor({ littleEndian = false, stringEncoding = "modified-utf8" } = {}) {
     this.bytes = new Uint8Array(1024);
     this.view = new DataView(this.bytes.buffer);
     this.offset = 0;
+    this.littleEndian = littleEndian;
+    this.stringEncoding = stringEncoding;
   }
 
   ensure(length) {
@@ -341,42 +362,44 @@ class NbtWriter {
 
   writeShort(value) {
     this.ensure(2);
-    this.view.setInt16(this.offset, value, false);
+    this.view.setInt16(this.offset, value, this.littleEndian);
     this.offset += 2;
   }
 
   writeUnsignedShort(value) {
     this.ensure(2);
-    this.view.setUint16(this.offset, value, false);
+    this.view.setUint16(this.offset, value, this.littleEndian);
     this.offset += 2;
   }
 
   writeInt(value) {
     this.ensure(4);
-    this.view.setInt32(this.offset, value, false);
+    this.view.setInt32(this.offset, value, this.littleEndian);
     this.offset += 4;
   }
 
   writeLong(value) {
     this.ensure(8);
-    this.view.setBigInt64(this.offset, BigInt(value), false);
+    this.view.setBigInt64(this.offset, BigInt(value), this.littleEndian);
     this.offset += 8;
   }
 
   writeFloat(value) {
     this.ensure(4);
-    this.view.setFloat32(this.offset, value, false);
+    this.view.setFloat32(this.offset, value, this.littleEndian);
     this.offset += 4;
   }
 
   writeDouble(value) {
     this.ensure(8);
-    this.view.setFloat64(this.offset, value, false);
+    this.view.setFloat64(this.offset, value, this.littleEndian);
     this.offset += 8;
   }
 
   writeString(value) {
-    const encoded = encodeModifiedUtf8(String(value));
+    const encoded = this.stringEncoding === "utf8"
+      ? encodeUtf8(value)
+      : encodeModifiedUtf8(String(value));
     this.writeUnsignedShort(encoded.length);
     this.ensure(encoded.length);
     this.bytes.set(encoded, this.offset);
@@ -473,13 +496,35 @@ class NbtWriter {
   }
 }
 
-export function decodeNbt(bytes) {
+export function decodeNbt(bytes, options = {}) {
   const input = asUint8Array(bytes);
-  return new NbtReader(input).readRoot();
+  return new NbtReader(input, options).readRoot();
 }
 
-export function encodeNbt(root) {
-  return new NbtWriter().writeRoot(root);
+export function encodeNbt(root, options = {}) {
+  return new NbtWriter(options).writeRoot(root);
+}
+
+export function decodeNbtSequence(bytes, options = {}) {
+  const input = asUint8Array(bytes);
+  const reader = new NbtReader(input, options);
+  const roots = [];
+  while (reader.offset < input.length) {
+    roots.push(reader.readRoot({ allowTrailing: true }));
+  }
+  return roots;
+}
+
+export function encodeNbtSequence(roots, options = {}) {
+  const encoded = (roots || []).map((root) => encodeNbt(root, options));
+  const total = encoded.reduce((sum, bytes) => sum + bytes.length, 0);
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const bytes of encoded) {
+    output.set(bytes, offset);
+    offset += bytes.length;
+  }
+  return output;
 }
 
 function cloneNbtValue(type, value) {
@@ -505,6 +550,8 @@ function cloneNbtValue(type, value) {
 export function cloneNbtDocument(document) {
   return {
     compression: document.compression,
+    endian: document.endian,
+    stringEncoding: document.stringEncoding,
     root: {
       type: document.root.type,
       name: document.root.name,
@@ -513,7 +560,11 @@ export function cloneNbtDocument(document) {
   };
 }
 
-export function parseNbt(bytes, { maxBytes = 10 * 1024 * 1024 } = {}) {
+export function parseNbt(bytes, {
+  maxBytes = 10 * 1024 * 1024,
+  littleEndian = false,
+  stringEncoding = "modified-utf8",
+} = {}) {
   const input = asUint8Array(bytes);
   let compression = "raw";
   let decoded = input;
@@ -527,13 +578,18 @@ export function parseNbt(bytes, { maxBytes = 10 * 1024 * 1024 } = {}) {
     throw new Error("NBTのサイズが大きすぎます。");
   }
   return {
-    root: decodeNbt(decoded),
+    root: decodeNbt(decoded, { littleEndian, stringEncoding }),
     compression,
+    endian: littleEndian ? "little" : "big",
+    stringEncoding,
   };
 }
 
 export function writeNbt(document) {
-  const bytes = encodeNbt(document.root);
+  const bytes = encodeNbt(document.root, {
+    littleEndian: document.endian === "little",
+    stringEncoding: document.stringEncoding || "modified-utf8",
+  });
   if (document.compression === "gzip") return pako.gzip(bytes);
   if (document.compression === "zlib") return pako.deflate(bytes);
   return bytes;

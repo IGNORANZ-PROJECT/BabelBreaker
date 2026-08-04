@@ -831,11 +831,12 @@ function toBedrockLocale(locale) {
 }
 
 function artifactExtension(fileName, detection) {
-  const original = String(fileName).match(/\.(?:jar|zip|mrpack|mcpack|mcaddon|mcworld)$/i)?.[0];
-  if (original) return original.toLowerCase();
   if (detection.id === "bedrock_addon") return ".mcaddon";
   if (detection.id === "bedrock_world") return ".mcworld";
+  if (detection.id === "resource_pack" && detection.edition === "bedrock") return ".mcpack";
   if (detection.id === "server_plugin") return ".jar";
+  const original = String(fileName).match(/\.(?:jar|zip|mrpack|mcpack|mcaddon|mcworld)$/i)?.[0];
+  if (original) return original.toLowerCase();
   return ".zip";
 }
 
@@ -909,6 +910,22 @@ async function analyzeDetectedArtifact(
     analysis.documents.push(...worldText.documents.map((document) => ({ ...document, containerId: "root" })));
     analysis.warnings.push(...worldText.warnings);
   }
+  if (detection.id === "bedrock_world") {
+    const rootContainer = analysis.containers.find((container) => container.id === "root");
+    try {
+      const { extractBedrockLevelDbDocuments } = await import("./bedrock-leveldb.js");
+      const levelDb = await extractBedrockLevelDbDocuments(
+        Object.values(rootContainer.zip.files),
+        { readBytes: readWorldBytes },
+      );
+      analysis.documents.push(...levelDb.documents);
+      analysis.warnings.push(...levelDb.warnings);
+      analysis.levelDb = levelDb.metadata;
+    } catch (error) {
+      analysis.warnings.push(`Bedrock LevelDBは変更せず保持します: ${error.message}`);
+      analysis.levelDb = null;
+    }
+  }
 
   const entries = [];
   const namespaces = [];
@@ -981,15 +998,33 @@ async function analyzeDetectedArtifact(
   if (missingReferences) {
     warnings.push(`マニフェスト参照のみのファイルが${missingReferences}件あります。インストール済みのパックZIPを追加すると解析できます。`);
   }
-  if (detection.id === "bedrock_world") {
-    warnings.push("BedrockのLevelDB内にある看板・本・コマンドブロックは変更しません。");
+  if (
+    detection.id === "bedrock_world" &&
+    !analysis.levelDb &&
+    !warnings.some((warning) => warning.startsWith("Bedrock LevelDB"))
+  ) {
+    warnings.push("Bedrock LevelDBを安全に解析できなかったため、データベースは変更しません。");
   }
   if (detection.id === "server_plugin") {
     warnings.push("プラグインごとに言語ファイルの読込方法が異なるため、導入後にサーバー上で確認してください。");
   }
 
   const sourceLanguages = [...new Set(entries.map((entry) => entry.sourceLanguage).filter(Boolean))];
-  const name = friendlyNameFromFilename(file.name);
+  let name = friendlyNameFromFilename(file.name);
+  if (detection.id === "server_plugin") {
+    const descriptor = archiveEntries.find(
+      (entry) => !entry.dir && /(^|\/)(?:plugin|paper-plugin|bungee)\.yml$/i.test(entry.name),
+    );
+    if (descriptor) {
+      try {
+        const text = await readArtifactText(descriptor, descriptor.name);
+        const declaredName = text.match(/^\s*name\s*:\s*["']?([^\r\n"']+)/im)?.[1]?.trim();
+        if (declaredName) name = declaredName;
+      } catch {
+        // Fall back to the archive filename when plugin metadata is unreadable.
+      }
+    }
+  }
   const artifact = {
     ...detection,
     extension: artifactExtension(file.name, detection),
@@ -1032,6 +1067,7 @@ async function analyzeDetectedArtifact(
     },
     artifactState: {
       sourceBytes: archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData),
+      levelDb: analysis.levelDb,
       containers: analysis.containers.map((container) => ({
         id: container.id,
         parentId: container.parentId,

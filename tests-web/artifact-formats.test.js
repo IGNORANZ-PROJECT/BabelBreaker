@@ -2,9 +2,21 @@ import assert from "node:assert/strict";
 import { File } from "node:buffer";
 import test from "node:test";
 import JSZip from "jszip";
+import { readLevelDb } from "mcbe-leveldb-reader";
 
 import { analyzeArchive, buildResourcePack, combineProjects } from "../src/core.js";
-import { NBT_TAG, parseNbt, writeNbt } from "../src/nbt.js";
+import {
+  NBT_TAG,
+  decodeNbtSequence,
+  encodeNbtSequence,
+  parseNbt,
+  writeNbt,
+} from "../src/nbt.js";
+import {
+  buildLevelDbManifestLog,
+  buildLevelDbWriteLog,
+  decodeLevelDbWriteLog,
+} from "../src/bedrock-leveldb.js";
 
 async function archiveFile(name, files) {
   const zip = new JSZip();
@@ -141,6 +153,23 @@ test("wrapped Bedrock packs normalize the root before updating the manifest", as
   assert.match(await zip.file("texts/ja_JP.lang").async("string"), /包まれたアイテム/);
 });
 
+test("Bedrock resource packs distributed as zip download as mcpack", async () => {
+  const file = await archiveFile("BedrockResources.zip", {
+    "manifest.json": JSON.stringify({
+      format_version: 2,
+      header: { name: "Resources", uuid: "12121212-1212-1212-1212-121212121212", version: [1, 0, 0] },
+      modules: [{ type: "resources", uuid: "34343434-3434-3434-3434-343434343434", version: [1, 0, 0] }],
+    }),
+    "texts/en_US.lang": "item.example.name=Example Item\n",
+  });
+  const project = await analyzeArchive(file);
+  translate(project, { "Example Item": "サンプルアイテム" });
+  const { filename, zip } = await outputZip(project);
+  assert.match(filename, /\.mcpack$/);
+  assert.ok(zip.file("manifest.json"));
+  assert.match(await zip.file("texts/ja_JP.lang").async("string"), /サンプルアイテム/);
+});
+
 test("mcaddon containers rebuild their nested packs", async () => {
   const resource = new JSZip();
   resource.file("manifest.json", JSON.stringify({ format_version: 2, header: { name: "Resource", uuid: "11111111-1111-1111-1111-111111111111", version: [1, 0, 0] }, modules: [{ type: "resources", uuid: "22222222-2222-2222-2222-222222222222", version: [1, 0, 0] }] }));
@@ -209,6 +238,39 @@ test("mcaddon containers accept nested Bedrock packs distributed as zip files", 
   assert.ok(zip.file("Unrelated.zip"));
 });
 
+test("mcaddon normalizes recognized zip packs even when they contain no translatable text", async () => {
+  const behavior = new JSZip();
+  behavior.file("StandaloneB/manifest.json", JSON.stringify({
+    format_version: 2,
+    header: {
+      name: "Standalone Behavior",
+      uuid: "99999999-9999-9999-9999-999999999999",
+      version: [1, 0, 0],
+    },
+    modules: [{
+      type: "data",
+      uuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      version: [1, 0, 0],
+    }],
+  }));
+  behavior.file("StandaloneB/functions/setup.mcfunction", "say ready\n");
+  const file = await archiveFile("Standalone.mcaddon", {
+    "StandaloneB.zip": await behavior.generateAsync({ type: "uint8array" }),
+  });
+
+  const project = await analyzeArchive(file);
+  assert.equal(project.artifactType, "bedrock_addon");
+  assert.equal(project.entries.length, 0);
+  const { zip } = await outputZip(project);
+  assert.equal(zip.file("StandaloneB.zip"), null);
+  const rebuilt = await JSZip.loadAsync(
+    await zip.file("StandaloneB.mcpack").async("uint8array"),
+  );
+  assert.ok(rebuilt.file("manifest.json"));
+  assert.ok(rebuilt.file("functions/setup.mcfunction"));
+  assert.equal(rebuilt.file("StandaloneB/manifest.json"), null);
+});
+
 test("mcaddon versions and UUID dependencies stay consistent after a pack changes", async () => {
   const resourceUuid = "11111111-1111-1111-1111-111111111111";
   const behaviorUuid = "33333333-3333-3333-3333-333333333333";
@@ -261,6 +323,135 @@ test("Bedrock worlds translate embedded packs while preserving LevelDB bytes", a
   assert.deepEqual(JSON.parse(await zip.file("resource_packs/story/manifest.json").async("string")).header.version, [1, 0, 0]);
 });
 
+test("Bedrock worlds translate commands and nested pack archives", async () => {
+  const resources = new JSZip();
+  resources.file("manifest.json", JSON.stringify({
+    format_version: 2,
+    header: { name: "Quest Resources", uuid: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", version: [1, 0, 0] },
+    modules: [{ type: "resources", uuid: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", version: [1, 0, 0] }],
+  }));
+  resources.file("texts/en_US.lang", "quest.guide=Quest guide\n");
+  const file = await archiveFile("Quest.mcworld", {
+    "Quest/level.dat": new Uint8Array([8, 0, 0, 0]),
+    "Quest/db/CURRENT": "MANIFEST-000001\n",
+    "Quest/behavior_packs/quest/functions/start.mcfunction": 'titleraw @a title {"rawtext":[{"text":"Welcome hero"}]}\n',
+    "Quest/resource_packs/quest.mcpack": await resources.generateAsync({ type: "uint8array" }),
+  });
+  const project = await analyzeArchive(file);
+  assert.equal(project.artifactType, "bedrock_world");
+  assert.ok(project.entries.some((entry) => entry.source === "Welcome hero"));
+  assert.ok(project.entries.some((entry) => entry.source === "Quest guide"));
+  translate(project, { "Welcome hero": "勇者よ、ようこそ", "Quest guide": "クエストガイド" });
+  const { zip } = await outputZip(project);
+  assert.match(
+    await zip.file("behavior_packs/quest/functions/start.mcfunction").async("string"),
+    /勇者よ、ようこそ/,
+  );
+  const rebuilt = await JSZip.loadAsync(
+    await zip.file("resource_packs/quest.mcpack").async("uint8array"),
+  );
+  assert.match(await rebuilt.file("texts/ja_JP.lang").async("string"), /クエストガイド/);
+  assert.equal(await zip.file("db/CURRENT").async("string"), "MANIFEST-000001\n");
+});
+
+test("Bedrock worlds translate LevelDB text through a checksummed additive log", async () => {
+  const key = new TextEncoder().encode("actorprefix-test-npc");
+  const sourceValue = encodeNbtSequence([{
+    type: NBT_TAG.COMPOUND,
+    name: "",
+    value: [
+      { type: NBT_TAG.STRING, name: "identifier", value: "minecraft:npc" },
+      { type: NBT_TAG.STRING, name: "CustomName", value: "Village Guide" },
+      { type: NBT_TAG.STRING, name: "InteractiveText", value: JSON.stringify({ rawtext: [{ text: "Welcome traveler" }] }) },
+    ],
+  }], { littleEndian: true, stringEncoding: "utf8" });
+  const sourceLog = buildLevelDbWriteLog([{ key, value: sourceValue }], 1n);
+  const manifest = buildLevelDbManifestLog({
+    logNumber: 2n,
+    nextFileNumber: 3n,
+    lastSequence: 1n,
+  });
+  const file = await archiveFile("NpcWorld.mcworld", {
+    "level.dat": new Uint8Array([8, 0, 0, 0]),
+    "db/CURRENT": "MANIFEST-000001\n",
+    "db/MANIFEST-000001": manifest,
+    "db/000002.log": sourceLog,
+  });
+
+  const project = await analyzeArchive(file);
+  assert.equal(project.artifactType, "bedrock_world");
+  assert.ok(project.entries.some((entry) => entry.source === "Village Guide"));
+  assert.ok(project.entries.some((entry) => entry.source === "Welcome traveler"));
+  translate(project, {
+    "Village Guide": "村の案内人",
+    "Welcome traveler": "旅人よ、ようこそ",
+  });
+  const { zip } = await outputZip(project);
+  assert.deepEqual(
+    await zip.file("db/MANIFEST-000001").async("uint8array"),
+    manifest,
+  );
+  assert.deepEqual(await zip.file("db/000002.log").async("uint8array"), sourceLog);
+  const patch = await zip.file("db/000003.log").async("uint8array");
+  const updates = decodeLevelDbWriteLog(patch);
+  assert.equal(updates.length, 1);
+  assert.deepEqual(updates[0].key, key);
+  assert.equal(updates[0].sequence, 2n);
+  const roots = decodeNbtSequence(updates[0].value, {
+    littleEndian: true,
+    stringEncoding: "utf8",
+  });
+  const customName = roots[0].value.find((tag) => tag.name === "CustomName");
+  const interactive = roots[0].value.find((tag) => tag.name === "InteractiveText");
+  assert.equal(customName.value, "村の案内人");
+  assert.equal(JSON.parse(interactive.value).rawtext[0].text, "旅人よ、ようこそ");
+
+  const recovered = await readLevelDb([
+    ["MANIFEST-000001", manifest],
+    ["000002.log", sourceLog],
+    ["000003.log", patch],
+  ].map(([name, bytes]) => ({
+    name,
+    arrayBuffer: async () => bytes.buffer.slice(
+      bytes.byteOffset,
+      bytes.byteOffset + bytes.byteLength,
+    ),
+  })));
+  const recoveredRecord = Object.values(recovered).find(
+    (record) => record && record.keyBytes && Buffer.from(record.keyBytes).equals(Buffer.from(key)),
+  );
+  const recoveredRoots = decodeNbtSequence(recoveredRecord.value, {
+    littleEndian: true,
+    stringEncoding: "utf8",
+  });
+  assert.equal(
+    recoveredRoots[0].value.find((tag) => tag.name === "CustomName").value,
+    "村の案内人",
+  );
+});
+
+test("Bedrock worlds distributed as zip download as mcworld", async () => {
+  const file = await archiveFile("SharedWorld.zip", {
+    "level.dat": new Uint8Array([8, 0, 0, 0]),
+    "db/CURRENT": "MANIFEST-000001\n",
+    "resource_packs/story/manifest.json": JSON.stringify({
+      format_version: 2,
+      header: { name: "Story", uuid: "56565656-5656-5656-5656-565656565656", version: [1, 0, 0] },
+      modules: [{ type: "resources", uuid: "78787878-7878-7878-7878-787878787878", version: [1, 0, 0] }],
+    }),
+    "resource_packs/story/texts/en_US.lang": "story.start=Start story\n",
+  });
+  const project = await analyzeArchive(file);
+  translate(project, { "Start story": "物語を始める" });
+  const { filename, zip } = await outputZip(project);
+  assert.match(filename, /\.mcworld$/);
+  assert.ok(zip.file("level.dat"));
+  assert.match(
+    await zip.file("resource_packs/story/texts/ja_JP.lang").async("string"),
+    /物語を始める/,
+  );
+});
+
 test("server plugins produce a translation patch instead of modifying the JAR", async () => {
   const file = await archiveFile("WelcomePlugin.jar", {
     "plugin.yml": "name: WelcomePlugin\nmain: example.Plugin\nversion: 1.0.0\n",
@@ -276,10 +467,32 @@ test("server plugins produce a translation patch instead of modifying the JAR", 
   assert.match(await zip.file("plugins/WelcomePlugin/lang/ja_jp.yml").async("string"), /%player%/);
 });
 
+test("server plugins support root Java message bundles and declared data-folder names", async () => {
+  const file = await archiveFile("EssentialsX-2.21.2.jar", {
+    "plugin.yml": "name: Essentials\nmain: com.earth2me.essentials.Essentials\nversion: 2.21.2\n",
+    "messages.properties": "teleporting=Teleporting...\nwelcome=Welcome, {0}!\n",
+    "messages_en.properties": "teleporting=Teleporting...\nwelcome=Welcome, {0}!\n",
+    "messages_ja.properties": "teleporting=\u30c6レポート中...\n",
+  });
+  const project = await analyzeArchive(file);
+  assert.equal(project.artifactType, "server_plugin");
+  assert.equal(project.mod.name, "Essentials");
+  assert.equal(project.documents.length, 1);
+  assert.deepEqual(project.entries.map((entry) => entry.key), ["teleporting", "welcome"]);
+  translate(project, { "Teleporting...": "テレポート中...", "Welcome, {0}!": "ようこそ、{0}さん！" });
+  const { zip } = await outputZip(project);
+  assert.equal(zip.file("plugins/EssentialsX-2.21.2/messages_ja.properties"), null);
+  const messages = await zip.file("plugins/Essentials/messages_ja.properties").async("string");
+  assert.match(messages, /teleporting=テレポート中/);
+  assert.match(messages, /welcome=ようこそ、\{0\}さん！/);
+});
+
 test("Modrinth packs add one language overlay without rewriting nested MOD JARs", async () => {
   const mod = new JSZip();
   mod.file("fabric.mod.json", JSON.stringify({ schemaVersion: 1, id: "inside", version: "1.0.0" }));
   mod.file("assets/inside/lang/en_us.json", JSON.stringify({ "inside.title": "Inside Mod" }));
+  mod.file("LICENSE.txt", "Uppercase license path");
+  mod.file("license.txt", "Lowercase license path");
   const modBytes = await mod.generateAsync({ type: "uint8array" });
   const file = await archiveFile("Pack.mrpack", {
     "modrinth.index.json": JSON.stringify({ formatVersion: 1, game: "minecraft", name: "Pack", versionId: "1", files: [], dependencies: { minecraft: "1.21.1" } }),
@@ -370,6 +583,23 @@ test("Java worlds translate known sign text inside Anvil region chunks", async (
   const messages = frontText.find((tag) => tag.name === "messages").value.items;
   assert.equal(JSON.parse(messages[0]).text, "旅人よ、ようこそ");
   assert.equal(JSON.parse(messages[1]).text, "二行目");
+});
+
+test("Java worlds translate text stored in separate entity regions", async () => {
+  const file = await archiveFile("EntityWorld.zip", {
+    "level.dat": new Uint8Array([1, 2, 3]),
+    "entities/r.0.0.mca": makeRegionWithSign(),
+  });
+  const project = await analyzeArchive(file);
+  assert.equal(project.artifactType, "java_world");
+  assert.ok(project.entries.some((entry) => entry.source === "Welcome traveler"));
+  translate(project, { "Welcome traveler": "旅人よ、ようこそ", "Second line": "二行目" });
+  const { zip } = await outputZip(project);
+  const nbt = firstRegionChunk(await zip.file("entities/r.0.0.mca").async("uint8array"));
+  const blockEntities = nbt.root.value.find((tag) => tag.name === "block_entities").value.items;
+  const frontText = blockEntities[0].find((tag) => tag.name === "front_text").value;
+  const messages = frontText.find((tag) => tag.name === "messages").value.items;
+  assert.equal(JSON.parse(messages[0]).text, "旅人よ、ようこそ");
 });
 
 test("multiple package formats download as one bundle of native outputs", async () => {

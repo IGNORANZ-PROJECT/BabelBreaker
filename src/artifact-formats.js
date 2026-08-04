@@ -11,7 +11,7 @@ export const ARTIFACT_TYPES = {
 };
 
 const ARCHIVE_EXTENSION = /\.(?:jar|zip|mrpack|mcpack|mcaddon|mcworld)$/i;
-const NESTED_ARCHIVE_PATH = /(?:^|\/)(?:mods\/[^/]+\.jar|resourcepacks\/[^/]+\.zip|datapacks\/[^/]+\.zip|resources\.zip|[^/]+\.mcpack)$/i;
+const NESTED_ARCHIVE_PATH = /(?:^|\/)(?:mods\/[^/]+\.jar|resourcepacks\/[^/]+\.zip|(?:resource_packs|behavior_packs)\/[^/]+\.(?:zip|mcpack)|datapacks\/[^/]+\.zip|resources\.zip|[^/]+\.mcpack)$/i;
 const SOURCE_LOCALES = new Set(["en", "en_us", "en_gb", "default"]);
 const TEXT_FIELD_NAMES = new Set([
   "text", "title", "subtitle", "description", "name", "lore", "message",
@@ -126,7 +126,7 @@ function validateContainerEntries(entries, maxEntries, maxExpandedBytes) {
   let expandedBytes = 0;
   for (const entry of entries) {
     if (!safePath(entry.name)) throw new Error(`安全でないファイルパスです: ${entry.name}`);
-    const normalized = entry.name.replaceAll("\\", "/").toLowerCase();
+    const normalized = entry.name.replaceAll("\\", "/");
     if (seen.has(normalized)) throw new Error(`重複するファイルパスです: ${entry.name}`);
     seen.add(normalized);
     const uncompressed = Number(entry?._data?.uncompressedSize || 0);
@@ -160,7 +160,7 @@ async function collectContainers(rootZip, detection, maxEntries, maxExpandedByte
   const containers = [{ id: "root", parentId: null, entryPath: "", zip: rootZip }];
   const rootEntries = Object.values(rootZip.files);
   validateContainerEntries(rootEntries, maxEntries, maxExpandedBytes);
-  const allowNested = ["modpack", "java_world", "bedrock_addon"].includes(detection.id);
+  const allowNested = ["modpack", "java_world", "bedrock_addon", "bedrock_world"].includes(detection.id);
   if (!allowNested) return containers;
 
   for (const entry of rootEntries) {
@@ -268,6 +268,20 @@ function pluginCandidate(path) {
     && /\.(?:json|properties|ya?ml|toml)$/i.test(path);
 }
 
+function pluginMessageBundle(path) {
+  const match = path.match(/^(.*\/)?(messages)(?:_([a-z]{2}(?:_[a-z]{2})?))?\.properties$/i);
+  if (!match) return null;
+  return {
+    prefix: match[1] || "",
+    stem: match[2],
+    locale: match[3]?.toLowerCase() || "default",
+  };
+}
+
+function localeLanguage(locale) {
+  return String(locale || "").split(/[_-]/)[0].toLowerCase();
+}
+
 function parsePluginScalarLines(text) {
   const records = [];
   const lines = String(text).split(/\r?\n/);
@@ -275,7 +289,8 @@ function parsePluginScalarLines(text) {
     if (!line.trim() || /^\s*[#!]/.test(line)) return;
     const match = line.match(/^(\s*[A-Za-z0-9_.-]+\s*[:=]\s*)(["']?)(.*?)(\2)(\s*(?:#.*)?)$/);
     if (!match || !/\p{L}/u.test(match[3])) return;
-    records.push({ key: `line.${index + 1}`, source: match[3], line: index, prefix: match[1] + match[2], suffix: match[4] + match[5] });
+    const key = line.match(/^\s*([A-Za-z0-9_.-]+)\s*[:=]/)?.[1] || `line.${index + 1}`;
+    records.push({ key, source: match[3], line: index, prefix: match[1] + match[2], suffix: match[4] + match[5] });
   });
   return { lines, records };
 }
@@ -283,7 +298,7 @@ function parsePluginScalarLines(text) {
 function parseFunctionText(text) {
   const lines = String(text).split(/\r?\n/);
   const records = [];
-  const allowedCommand = /^\s*(?:execute\s+.*?\s+run\s+)?(?:tellraw|title|bossbar\s+set\s+\S+\s+name|team\s+modify\s+\S+\s+(?:displayName|prefix|suffix)|scoreboard\s+objectives\s+add)\b/i;
+  const allowedCommand = /^\s*(?:execute\s+.*?\s+run\s+)?(?:tellraw|titleraw|title|bossbar\s+set\s+\S+\s+name|team\s+modify\s+\S+\s+(?:displayName|prefix|suffix)|scoreboard\s+objectives\s+add)\b/i;
   lines.forEach((line, lineIndex) => {
     if (!allowedCommand.test(line)) return;
     const pattern = /(["']?text["']?\s*:\s*)(["'])(.*?)(\2)/g;
@@ -323,6 +338,7 @@ export async function analyzeArtifactDocuments(rootZip, detection, {
     const entries = Object.values(container.zip.files).filter((entry) => !entry.dir);
     const javaGroups = new Map();
     const bedrockGroups = new Map();
+    const pluginBundleGroups = new Map();
 
     for (const entry of entries) {
       const path = entry.name.replaceAll("\\", "/");
@@ -369,7 +385,11 @@ export async function analyzeArtifactDocuments(rootZip, detection, {
         continue;
       }
 
-      if (["data_pack", "java_world", "modpack"].includes(detection.id) && /(?:^|\/)data\/[^/]+\/functions?\/.+\.mcfunction$/i.test(path)) {
+      const supportsFunctions = ["data_pack", "java_world", "modpack", "bedrock_addon", "bedrock_world"].includes(detection.id);
+      const functionPath = detection.edition === "bedrock"
+        ? /(?:^|\/)functions\/.+\.mcfunction$/i.test(path)
+        : /(?:^|\/)data\/[^/]+\/functions?\/.+\.mcfunction$/i.test(path);
+      if (supportsFunctions && functionPath) {
         try {
           const parsed = parseFunctionText(await readText(entry, path));
           if (parsed.records.length) documents.push({ id: `${container.id}:${path}`, containerId: container.id, format: "function-text", sourcePath: path, outputPath: path, sourceLocale: "en_us", namespace: path, data: parsed.lines, records: parsed.records });
@@ -384,6 +404,24 @@ export async function analyzeArtifactDocuments(rootZip, detection, {
           const json = JSON.parse(await readText(entry, path));
           const records = flattenJsonText(json);
           if (records.length) documents.push({ id: `${container.id}:${path}`, containerId: container.id, format: "structured-json", sourcePath: path, outputPath: path, sourceLocale: "en_us", namespace: path, data: json, records });
+        } catch (error) {
+          warnings.push(`${path}: ${error.message}`);
+        }
+        continue;
+      }
+
+      const messageBundle = detection.id === "server_plugin"
+        ? pluginMessageBundle(path)
+        : null;
+      if (messageBundle) {
+        const groupId = `${container.id}:${messageBundle.prefix}${messageBundle.stem}`;
+        if (!pluginBundleGroups.has(groupId)) pluginBundleGroups.set(groupId, []);
+        try {
+          pluginBundleGroups.get(groupId).push({
+            ...messageBundle,
+            path,
+            parsed: parsePluginScalarLines(await readText(entry, path)),
+          });
         } catch (error) {
           warnings.push(`${path}: ${error.message}`);
         }
@@ -442,6 +480,34 @@ export async function analyzeArtifactDocuments(rootZip, detection, {
         newline: source.newline,
         preserved: existing?.data || {},
         records: source.records.map((record) => ({ ...record, existingTarget: existing?.data?.[record.key] })),
+      });
+    }
+
+    for (const candidates of pluginBundleGroups.values()) {
+      const source = candidates.find((candidate) => candidate.locale === "en_us")
+        || candidates.find((candidate) => candidate.locale === "en_gb")
+        || candidates.find((candidate) => candidate.locale === "en")
+        || candidates.find((candidate) => candidate.locale === "default")
+        || candidates[0];
+      const targetLanguage = localeLanguage(targetLocale);
+      const existing = candidates.find((candidate) => candidate.locale === String(targetLocale).toLowerCase())
+        || candidates.find((candidate) => localeLanguage(candidate.locale) === targetLanguage);
+      const existingByKey = new Map(
+        (existing?.parsed.records || []).map((record) => [record.key, record.source]),
+      );
+      documents.push({
+        id: `${container.id}:${source.prefix}${source.stem}`,
+        containerId: container.id,
+        format: "plugin-lines",
+        sourcePath: source.path,
+        outputPath: existing?.path || `${source.prefix}${source.stem}_${targetLanguage}.properties`,
+        sourceLocale: source.locale === "default" ? "en_us" : source.locale,
+        namespace: source.path,
+        data: source.parsed.lines,
+        records: source.parsed.records.map((record) => ({
+          ...record,
+          existingTarget: existingByKey.get(record.key),
+        })),
       });
     }
   }
@@ -684,6 +750,7 @@ export async function buildArtifactArchive(project, {
 
   const applyDocuments = async (zip, documents, pathPrefix = "") => {
     for (const document of documents || []) {
+      if (document.format === "bedrock-leveldb-nbt") continue;
       const prefix = pathPrefix || (
         normalizeRoot && document.containerId === "root" ? rootPrefix : ""
       );
@@ -710,6 +777,20 @@ export async function buildArtifactArchive(project, {
   };
 
   await applyDocuments(root, documentsByContainer.get("root"));
+  const levelDbPatch = project.artifactState?.levelDb
+    ? (await import("./bedrock-leveldb.js")).buildBedrockLevelDbPatch(
+        project,
+        entriesById,
+        includeEntry,
+      )
+    : null;
+  if (levelDbPatch) {
+    const patchPath = normalizeRoot && levelDbPatch.path.startsWith(rootPrefix)
+      ? levelDbPatch.path.slice(rootPrefix.length)
+      : levelDbPatch.path;
+    if (root.file(patchPath)) throw new Error("Bedrock LevelDBパッチのファイル番号が重複しています。");
+    root.file(patchPath, levelDbPatch.bytes);
+  }
   await applyBedrockVersionPlan(root, "root", bedrockVersionPlan, { rootPrefix, normalizeRoot });
 
   if (project.artifactType === "modpack") {
@@ -741,7 +822,9 @@ export async function buildArtifactArchive(project, {
         (record.manifest.dependencies || []).some((dependency) => dependency?.uuid && bedrockVersionPlan.versions.has(dependency.uuid))
       ),
     );
-    if (!childDocuments?.length && !needsManifestUpdate) continue;
+    const needsPackExtensionNormalization =
+      project.artifactType === "bedrock_addon" && /\.zip$/i.test(container.entryPath);
+    if (!childDocuments?.length && !needsManifestUpdate && !needsPackExtensionNormalization) continue;
     let child = await JSZip.loadAsync(container.sourceBytes, { createFolders: false });
     const childRootPrefix = project.artifactType === "bedrock_addon"
       ? container.rootPrefix || ""

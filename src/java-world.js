@@ -249,8 +249,16 @@ function renderRegion(document, entriesById, includeEntry) {
 export async function extractJavaWorldRegionDocuments(entries, { readBytes, maxRegions = 64 } = {}) {
   const documents = [];
   const warnings = [];
-  const regions = entries.filter((entry) => !entry.dir && /(?:^|\/)region\/r\.-?\d+\.-?\d+\.mca$/i.test(entry.name));
-  if (regions.length > maxRegions) warnings.push(`regionファイルが${regions.length}個あるため、先頭${maxRegions}個だけを解析します。`);
+  const regions = entries.filter(
+    (entry) =>
+      !entry.dir &&
+      /(?:^|\/)(?:region|entities)\/r\.-?\d+\.-?\d+\.mca$/i.test(entry.name),
+  );
+  if (regions.length > maxRegions) {
+    warnings.push(
+      `region・entitiesファイルが${regions.length}個あるため、先頭${maxRegions}個だけを解析します。`,
+    );
+  }
   for (const entry of regions.slice(0, maxRegions)) {
     try {
       const bytes = await readBytes(entry, entry.name, 64 * 1024 * 1024);

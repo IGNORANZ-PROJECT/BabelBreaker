@@ -31,6 +31,7 @@ import {
   createI18n,
   detectUiLocale,
 } from "./i18n.js";
+import { selectGuideForProject } from "./guide-selection.js";
 import { SHOW_PROJECT_INFO } from "./site-config.js";
 
 const initialUrl = new URL(window.location.href);
@@ -795,18 +796,6 @@ function renderGameGuide(game = state.guideGame || "minecraft", minecraftMode = 
   elements["minecraft-troubleshooting"].hidden = game !== "minecraft" || !["javaMod", "javaResourcePack"].includes(state.minecraftGuideMode);
 }
 
-function guideModeForProject(project) {
-  if (!project || (project.game || "minecraft") !== "minecraft") return "javaMod";
-  if (project.artifactType === "modpack") return "modpack";
-  if (project.artifactType === "java_world") return "javaWorld";
-  if (project.artifactType === "data_pack") return "dataPack";
-  if (project.artifactType === "server_plugin") return "serverPlugin";
-  if (project.artifactType === "bedrock_world") return "bedrockWorld";
-  if (project.artifactType === "bedrock_addon" || project.edition === "bedrock") return "bedrockAddon";
-  if (project.artifactType === "resource_pack") return "javaResourcePack";
-  return "javaMod";
-}
-
 function outputUiKeys(project) {
   const game = project.game || "minecraft";
   if (project.artifactType) {
@@ -949,7 +938,8 @@ function renderProject({ scroll = true } = {}) {
   elements["download-label"].textContent = t(outputCopy.download);
   elements["start-button"].disabled = stats.total === 0;
   elements["download-button"].disabled = stats.total === 0;
-  renderGameGuide(project.game || "minecraft", guideModeForProject(project));
+  const selectedGuide = selectGuideForProject(project);
+  renderGameGuide(selectedGuide.game, selectedGuide.minecraftMode);
   elements["review-panel"].hidden = true;
   elements["clipboard-panel"].hidden = true;
   elements["progress-panel"].hidden = true;

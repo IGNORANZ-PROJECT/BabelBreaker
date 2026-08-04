@@ -5,7 +5,9 @@ import {
   NBT_TAG,
   cloneNbtDocument,
   decodeNbt,
+  decodeNbtSequence,
   encodeNbt,
+  encodeNbtSequence,
   parseNbt,
   writeNbt,
 } from "../src/nbt.js";
@@ -70,6 +72,23 @@ test("NBT codec preserves gzip and zlib compression", () => {
     assert.equal(parsed.compression, compression);
     assert.deepEqual(encodeNbt(parsed.root), encodeNbt(document.root));
   }
+});
+
+test("NBT codec round-trips Bedrock little-endian UTF-8 sequences", () => {
+  const first = allTagTypesRoot();
+  first.name = "Bedrock😀";
+  const second = {
+    type: NBT_TAG.COMPOUND,
+    name: "",
+    value: [{ type: NBT_TAG.STRING, name: "Text", value: "Welcome 世界🌍" }],
+  };
+  const options = { littleEndian: true, stringEncoding: "utf8" };
+  const encoded = encodeNbtSequence([first, second], options);
+  const decoded = decodeNbtSequence(encoded, options);
+  assert.equal(decoded.length, 2);
+  assert.equal(decoded[0].name, "Bedrock😀");
+  assert.equal(decoded[1].value[0].value, "Welcome 世界🌍");
+  assert.deepEqual(encodeNbtSequence(decoded, options), encoded);
 });
 
 test("cloned NBT documents can be edited without mutating source data", () => {

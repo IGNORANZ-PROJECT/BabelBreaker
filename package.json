@@ -29,6 +29,7 @@
   "dependencies": {
     "@browsermt/bergamot-translator": "^0.4.9",
     "jszip": "3.10.1",
+    "mcbe-leveldb-reader": "2.0.1",
     "pako": "1.0.11"
   },
   "devDependencies": {
