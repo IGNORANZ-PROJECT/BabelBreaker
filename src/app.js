@@ -421,6 +421,7 @@ document.querySelector("#app").innerHTML = `
                 <option value="forced">${t("bedrockForcedMode")}</option>
               </select>
               <small id="bedrock-output-mode-copy">${t("bedrockLocalizedModeCopy")}</small>
+              <div class="bedrock-localization-status" id="bedrock-localization-status" role="status"></div>
             </div>
           </div>
           <button class="primary-button download-button" id="download-button" type="button">
@@ -503,6 +504,19 @@ document.querySelector("#app").innerHTML = `
     </section>
   </main>
 
+  <dialog class="download-warning-dialog" id="download-warning-dialog" aria-labelledby="download-warning-title" aria-describedby="download-warning-copy">
+    <div class="download-warning-icon">${icon("warning", 22)}</div>
+    <div>
+      <h2 id="download-warning-title"></h2>
+      <p id="download-warning-copy"></p>
+    </div>
+    <div class="download-warning-actions">
+      <button class="primary-button compact" id="download-warning-primary" type="button"></button>
+      <button class="secondary-button" id="download-warning-secondary" type="button"></button>
+      <button class="text-button" id="download-warning-cancel" type="button">${t("cancel")}</button>
+    </div>
+  </dialog>
+
   <footer>
     <a class="brand footer-brand" href="#home"><img src="/icon-ui.png" width="30" height="30" alt="" /> Babel Breaker</a>
     ${footerProjectInfo}
@@ -565,6 +579,13 @@ const elements = Object.fromEntries(
     "bedrock-output-settings",
     "bedrock-output-mode",
     "bedrock-output-mode-copy",
+    "bedrock-localization-status",
+    "download-warning-dialog",
+    "download-warning-title",
+    "download-warning-copy",
+    "download-warning-primary",
+    "download-warning-secondary",
+    "download-warning-cancel",
     "guide-step",
     "minecraft-guide-tabs",
     "guide-title",
@@ -650,6 +671,16 @@ function supportsForcedBedrockOutput(project = state.project) {
   );
 }
 
+function bedrockLocalizationSummary(project = state.project) {
+  const documents = (project?.documents || []).filter(
+    (document) => document.format === "bedrock-lang",
+  );
+  const uncertain = documents.filter(
+    (document) => !document.localizationEvidence?.confirmed,
+  ).length;
+  return { total: documents.length, uncertain, confirmed: documents.length - uncertain };
+}
+
 function updateBedrockOutputMode() {
   const supported = supportsForcedBedrockOutput();
   elements["bedrock-output-settings"].hidden = !supported;
@@ -660,6 +691,66 @@ function updateBedrockOutputMode() {
       ? "bedrockForcedModeCopy"
       : "bedrockLocalizedModeCopy",
   );
+  const summary = bedrockLocalizationSummary();
+  const status = elements["bedrock-localization-status"];
+  status.classList.toggle("is-warning", summary.uncertain > 0);
+  status.classList.toggle("is-confirmed", summary.total > 0 && summary.uncertain === 0);
+  status.textContent = !supported
+    ? ""
+    : summary.uncertain === 0
+      ? t("bedrockLocalizationConfirmed")
+      : state.project?.artifactType === "bedrock_world" && summary.total > 1
+        ? t("bedrockWorldLocalizationUncertain", summary)
+        : t("bedrockLocalizationUncertain");
+}
+
+function openDownloadWarning(kind, summary) {
+  const dialog = elements["download-warning-dialog"];
+  const forced = kind === "forced";
+  elements["download-warning-title"].textContent = t(
+    forced ? "bedrockCompatibilityWarningTitle" : "bedrockLocalizationWarningTitle",
+  );
+  elements["download-warning-copy"].textContent = forced
+    ? t("bedrockCompatibilityWarningCopy")
+    : state.project?.artifactType === "bedrock_world" && summary.total > 1
+      ? t("bedrockWorldLocalizationWarningCopy", summary)
+      : t("bedrockLocalizationWarningCopy");
+  elements["download-warning-primary"].textContent = t(
+    forced ? "downloadCompatibilityAfterBackup" : "downloadStandardVersion",
+  );
+  elements["download-warning-secondary"].textContent = t(
+    forced ? "switchToStandardVersion" : "switchToCompatibilityVersion",
+  );
+  return new Promise((resolve) => {
+    const finish = (result) => {
+      dialog.removeEventListener("cancel", onCancel);
+      dialog.close();
+      resolve(result);
+    };
+    const onCancel = (event) => {
+      event.preventDefault();
+      finish("cancel");
+    };
+    dialog.addEventListener("cancel", onCancel);
+    elements["download-warning-primary"].onclick = () => finish("download");
+    elements["download-warning-secondary"].onclick = () => finish("switch");
+    elements["download-warning-cancel"].onclick = () => finish("cancel");
+    dialog.showModal();
+  });
+}
+
+async function confirmBedrockDownloadMode() {
+  if (!supportsForcedBedrockOutput()) return state.bedrockTranslationMode;
+  const summary = bedrockLocalizationSummary();
+  const forced = state.bedrockTranslationMode === "forced";
+  if (!forced && summary.uncertain === 0) return "localized";
+  const decision = await openDownloadWarning(forced ? "forced" : "localized", summary);
+  if (decision === "download") return state.bedrockTranslationMode;
+  if (decision === "switch") {
+    state.bedrockTranslationMode = forced ? "localized" : "forced";
+    updateBedrockOutputMode();
+  }
+  return null;
 }
 
 function currentTarget() {
@@ -1326,6 +1417,8 @@ function applyPastedTranslation({ loadedFileName = "" } = {}) {
 }
 
 async function downloadPack() {
+  const confirmedMode = await confirmBedrockDownloadMode();
+  if (!confirmedMode) return;
   setBusy(true);
   clearNotice();
   try {
@@ -1336,7 +1429,7 @@ async function downloadPack() {
       state.project,
       state.project.minecraftVersion,
       "blob",
-      { bedrockTranslationMode: state.bedrockTranslationMode },
+      { bedrockTranslationMode: confirmedMode },
     );
     const url = URL.createObjectURL(archive);
     const anchor = document.createElement("a");

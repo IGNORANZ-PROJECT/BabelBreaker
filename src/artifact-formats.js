@@ -282,6 +282,36 @@ function localeLanguage(locale) {
   return String(locale || "").split(/[_-]/)[0].toLowerCase();
 }
 
+async function bedrockLocalizationEvidence(zip, prefix, candidates, readText) {
+  const localeFiles = [...new Set(
+    candidates.map((candidate) => String(candidate.locale || "").toLowerCase()),
+  )];
+  const languagesPath = `${prefix}languages.json`.toLowerCase();
+  const languagesEntry = Object.values(zip.files).find(
+    (entry) => !entry.dir && entry.name.replaceAll("\\", "/").toLowerCase() === languagesPath,
+  );
+  let languagesJson = languagesEntry ? "invalid" : "missing";
+  let declaredLocales = [];
+  if (languagesEntry) {
+    try {
+      const parsed = JSON.parse(await readText(languagesEntry, languagesEntry.name));
+      if (Array.isArray(parsed) && parsed.every((locale) => typeof locale === "string")) {
+        languagesJson = "valid";
+        declaredLocales = [...new Set(parsed.map((locale) => locale.toLowerCase()))];
+      }
+    } catch {
+      // Keep invalid so the UI can explain that compatibility is uncertain.
+    }
+  }
+  const declaresKnownLocale = declaredLocales.some((locale) => localeFiles.includes(locale));
+  return {
+    confirmed: localeFiles.length > 1 || declaresKnownLocale,
+    languageFileCount: localeFiles.length,
+    languagesJson,
+    declaredLocales,
+  };
+}
+
 function parsePluginScalarLines(text) {
   const records = [];
   const lines = String(text).split(/\r?\n/);
@@ -468,6 +498,12 @@ export async function analyzeArtifactDocuments(rootZip, detection, {
       const normalizedTargetLocale = String(targetLocale).toLowerCase();
       const source = candidates.find((candidate) => candidate.locale === "en_us") || candidates.find((candidate) => candidate.locale !== normalizedTargetLocale) || candidates[0];
       const existing = candidates.find((candidate) => candidate.locale === normalizedTargetLocale);
+      const localizationEvidence = await bedrockLocalizationEvidence(
+        container.zip,
+        source.prefix,
+        candidates,
+        readText,
+      );
       documents.push({
         id: `${container.id}:${source.prefix}`,
         containerId: container.id,
@@ -479,6 +515,7 @@ export async function analyzeArtifactDocuments(rootZip, detection, {
         data: source.lines,
         newline: source.newline,
         preserved: existing?.data || {},
+        localizationEvidence,
         records: source.records.map((record) => ({ ...record, existingTarget: existing?.data?.[record.key] })),
       });
     }

@@ -185,11 +185,62 @@ test("mcaddon containers rebuild their nested packs", async () => {
   });
   const project = await analyzeArchive(file);
   assert.equal(project.artifactType, "bedrock_addon");
+  assert.deepEqual(project.documents[0].localizationEvidence, {
+    confirmed: true,
+    languageFileCount: 1,
+    languagesJson: "valid",
+    declaredLocales: ["en_us"],
+  });
   translate(project, { "Example Creature": "サンプルの生物" });
   const { zip } = await outputZip(project);
   const rebuilt = await JSZip.loadAsync(await zip.file("Creatures-Resources.mcpack").async("uint8array"));
   assert.match(await rebuilt.file("texts/ja_JP.lang").async("string"), /サンプルの生物/);
   assert.match(await rebuilt.file("texts/en_US.lang").async("string"), /Example Creature/);
+});
+
+test("single-language Add-ons without languages.json are marked as uncertain", async () => {
+  const resource = new JSZip();
+  resource.file("manifest.json", JSON.stringify({
+    format_version: 2,
+    header: { name: "Legacy Resource", uuid: "91919191-9191-9191-9191-919191919191", version: [1, 0, 0] },
+    modules: [{ type: "resources", uuid: "92929292-9292-9292-9292-929292929292", version: [1, 0, 0] }],
+  }));
+  resource.file("texts/en_US.lang", "entity.legacy.name=Legacy Creature\n");
+  const file = await archiveFile("Legacy.mcaddon", {
+    "Legacy-Resources.mcpack": await resource.generateAsync({ type: "uint8array" }),
+  });
+
+  const project = await analyzeArchive(file);
+  assert.deepEqual(project.documents[0].localizationEvidence, {
+    confirmed: false,
+    languageFileCount: 1,
+    languagesJson: "missing",
+    declaredLocales: [],
+  });
+});
+
+test("multiple Bedrock language files confirm language switching without languages.json", async () => {
+  const resource = new JSZip();
+  resource.file("manifest.json", JSON.stringify({
+    format_version: 2,
+    header: { name: "Multilingual Resource", uuid: "93939393-9393-9393-9393-939393939393", version: [1, 0, 0] },
+    modules: [{ type: "resources", uuid: "94949494-9494-9494-9494-949494949494", version: [1, 0, 0] }],
+  }));
+  resource.file("texts/en_US.lang", "entity.multi.name=Creature\n");
+  resource.file("texts/fr_FR.lang", "entity.multi.name=Créature\n");
+  const file = await archiveFile("Multilingual.mcaddon", {
+    "Multilingual-Resources.mcpack": await resource.generateAsync({ type: "uint8array" }),
+  });
+
+  const project = await analyzeArchive(file);
+  const evidence = project.documents.find((document) => document.sourceLocale === "en_us")
+    ?.localizationEvidence;
+  assert.deepEqual(evidence, {
+    confirmed: true,
+    languageFileCount: 2,
+    languagesJson: "missing",
+    declaredLocales: [],
+  });
 });
 
 test("forced mcaddon output replaces the source lang but preserves omitted lines", async () => {

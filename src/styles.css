@@ -1161,6 +1161,98 @@ select {
   line-height: 1.55;
 }
 
+.bedrock-localization-status {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface-muted);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.bedrock-localization-status.is-confirmed {
+  border-color: color-mix(in srgb, var(--success) 20%, var(--line));
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.bedrock-localization-status.is-warning {
+  border-color: color-mix(in srgb, var(--warning) 24%, var(--line));
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.download-warning-dialog {
+  width: min(520px, calc(100% - 32px));
+  margin: auto;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 24px 70px rgba(24, 26, 29, 0.2);
+}
+
+.download-warning-dialog::backdrop {
+  background: rgba(24, 26, 29, 0.42);
+  backdrop-filter: blur(3px);
+}
+
+.download-warning-dialog[open] {
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  gap: 4px 14px;
+}
+
+.download-warning-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  color: var(--warning);
+  background: var(--warning-soft);
+  place-items: center;
+}
+
+.download-warning-dialog h2 {
+  margin: 2px 0 8px;
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.download-warning-dialog p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.download-warning-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.download-warning-actions button {
+  min-height: 40px;
+}
+
+.download-warning-actions .text-button {
+  order: -1;
+  margin-right: auto;
+}
+
 .download-button {
   width: auto;
   min-width: 250px;
@@ -1653,6 +1745,41 @@ footer {
 
   .bedrock-output-settings small {
     grid-column: auto;
+  }
+
+  .bedrock-localization-status {
+    grid-column: auto;
+    width: 100%;
+    border-radius: 10px;
+  }
+
+  .download-warning-dialog {
+    padding: 20px;
+  }
+
+  .download-warning-dialog[open] {
+    grid-template-columns: 36px 1fr;
+    gap: 4px 12px;
+  }
+
+  .download-warning-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .download-warning-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .download-warning-actions button,
+  .download-warning-actions .text-button {
+    width: 100%;
+    margin: 0;
+  }
+
+  .download-warning-actions .text-button {
+    order: 1;
   }
 
   .review-actions {
