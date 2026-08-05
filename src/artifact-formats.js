@@ -515,7 +515,12 @@ export async function analyzeArtifactDocuments(rootZip, detection, {
   return { containers, documents, warnings, referencedFiles };
 }
 
-export function renderArtifactDocument(document, entriesById, includeEntry) {
+export function renderArtifactDocument(
+  document,
+  entriesById,
+  includeEntry,
+  { preserveUntranslated = false } = {},
+) {
   if (["java-json-lang", "java-legacy-lang"].includes(document.format)) {
     const data = { ...(document.preserved || {}) };
     for (const record of document.records) {
@@ -528,9 +533,11 @@ export function renderArtifactDocument(document, entriesById, includeEntry) {
     const lines = [...document.data];
     for (const record of document.records) {
       const entry = entriesById.get(record.entryId);
-      lines[record.line] = entry && includeEntry(entry)
-        ? `${record.prefix}${entry.translation}${record.suffix}`
-        : "";
+      if (entry && includeEntry(entry)) {
+        lines[record.line] = `${record.prefix}${entry.translation}${record.suffix}`;
+      } else if (!preserveUntranslated) {
+        lines[record.line] = "";
+      }
     }
     const newline = document.newline || "\n";
     return `${lines.join(newline)}${newline}`;
@@ -690,7 +697,11 @@ export async function buildArtifactArchive(project, {
   archiveOptions,
   resourcePackMetadata,
   renderDocument,
+  bedrockTranslationMode = "localized",
 } = {}) {
+  const forceBedrockSource =
+    bedrockTranslationMode === "forced" &&
+    ["bedrock_addon", "bedrock_world"].includes(project.artifactType);
   const render = (document) => {
     try {
       return renderArtifactDocument(document, entriesById, includeEntry);
@@ -757,7 +768,24 @@ export async function buildArtifactArchive(project, {
       const outputPath = prefix && document.outputPath.startsWith(prefix)
         ? document.outputPath.slice(prefix.length)
         : document.outputPath;
-      zip.file(outputPath, render(document));
+      const sourceOutputPath = prefix && document.sourcePath.startsWith(prefix)
+        ? document.sourcePath.slice(prefix.length)
+        : document.sourcePath;
+      const forcedBedrockDocument = forceBedrockSource && document.format === "bedrock-lang";
+      const forcedContents = forcedBedrockDocument
+        ? renderArtifactDocument(document, entriesById, includeEntry, {
+            preserveUntranslated: true,
+          })
+        : null;
+      zip.file(
+        outputPath,
+        forcedBedrockDocument && sourceOutputPath === outputPath
+          ? forcedContents
+          : render(document),
+      );
+      if (forcedBedrockDocument && sourceOutputPath !== outputPath) {
+        zip.file(sourceOutputPath, forcedContents);
+      }
       if (document.format === "bedrock-lang") {
         const languagesPath = outputPath.replace(/[^/]+\.lang$/i, "languages.json");
         const existing = zip.file(languagesPath);
@@ -855,5 +883,6 @@ export async function buildArtifactArchive(project, {
   const archive = await root.generateAsync(archiveOptions(outputType));
   const original = project.fileName.replace(ARCHIVE_EXTENSION, "");
   const extension = project.artifact.extension || project.fileName.match(/\.[^.]+$/)?.[0] || ".zip";
-  return { archive, filename: `${original}.${project.targetLocale}${extension}` };
+  const modeSuffix = forceBedrockSource ? ".forced" : "";
+  return { archive, filename: `${original}.${project.targetLocale}${modeSuffix}${extension}` };
 }

@@ -72,8 +72,13 @@ function firstRegionChunk(region) {
   return parseNbt(region.slice(start + 5, start + 4 + length));
 }
 
-async function outputZip(project) {
-  const result = await buildResourcePack(project, project.minecraftVersion, "nodebuffer");
+async function outputZip(project, options) {
+  const result = await buildResourcePack(
+    project,
+    project.minecraftVersion,
+    "nodebuffer",
+    options,
+  );
   return { ...result, zip: await JSZip.loadAsync(result.archive) };
 }
 
@@ -184,6 +189,48 @@ test("mcaddon containers rebuild their nested packs", async () => {
   const { zip } = await outputZip(project);
   const rebuilt = await JSZip.loadAsync(await zip.file("Creatures-Resources.mcpack").async("uint8array"));
   assert.match(await rebuilt.file("texts/ja_JP.lang").async("string"), /サンプルの生物/);
+  assert.match(await rebuilt.file("texts/en_US.lang").async("string"), /Example Creature/);
+});
+
+test("forced mcaddon output replaces the source lang but preserves omitted lines", async () => {
+  const resource = new JSZip();
+  resource.file("manifest.json", JSON.stringify({
+    format_version: 2,
+    header: { name: "Forced Resource", uuid: "13131313-1313-1313-1313-131313131313", version: [1, 0, 0] },
+    modules: [{ type: "resources", uuid: "14141414-1414-1414-1414-141414141414", version: [1, 0, 0] }],
+  }));
+  resource.file("texts/languages.json", JSON.stringify(["en_US"]));
+  resource.file(
+    "texts/en_US.lang",
+    "entity.example.name=Example Creature\nentity.example.note=Keep this original\n",
+  );
+  const file = await archiveFile("Forced.mcaddon", {
+    "Forced-Resources.mcpack": await resource.generateAsync({ type: "uint8array" }),
+  });
+  const project = await analyzeArchive(file);
+  const translated = project.entries.find((entry) => entry.source === "Example Creature");
+  translated.translation = "サンプルの生物";
+  translated.status = "edited";
+  const omitted = project.entries.find((entry) => entry.source === "Keep this original");
+  omitted.ignored = true;
+
+  const { zip, filename } = await outputZip(project, {
+    bedrockTranslationMode: "forced",
+  });
+  assert.match(filename, /\.ja_JP\.forced\.mcaddon$/);
+  const rebuilt = await JSZip.loadAsync(
+    await zip.file("Forced-Resources.mcpack").async("uint8array"),
+  );
+  const sourceLang = await rebuilt.file("texts/en_US.lang").async("string");
+  const targetLang = await rebuilt.file("texts/ja_JP.lang").async("string");
+  assert.match(sourceLang, /entity\.example\.name=サンプルの生物/);
+  assert.match(sourceLang, /entity\.example\.note=Keep this original/);
+  assert.match(targetLang, /entity\.example\.name=サンプルの生物/);
+  assert.doesNotMatch(targetLang, /Keep this original/);
+  assert.deepEqual(
+    JSON.parse(await rebuilt.file("texts/languages.json").async("string")),
+    ["en_US", "ja_JP"],
+  );
 });
 
 test("mcaddon containers accept nested Bedrock packs distributed as zip files", async () => {
@@ -323,6 +370,34 @@ test("Bedrock worlds translate embedded packs while preserving LevelDB bytes", a
   assert.deepEqual(JSON.parse(await zip.file("resource_packs/story/manifest.json").async("string")).header.version, [1, 0, 0]);
 });
 
+test("forced Bedrock world output replaces lang files inside embedded Add-ons", async () => {
+  const file = await archiveFile("ForcedWorld.mcworld", {
+    "level.dat": new Uint8Array([8, 0, 0, 0]),
+    "db/CURRENT": "MANIFEST-000001\n",
+    "resource_packs/story/manifest.json": JSON.stringify({
+      format_version: 2,
+      header: { name: "Story", uuid: "15151515-1515-1515-1515-151515151515", version: [1, 0, 0] },
+      modules: [{ type: "resources", uuid: "16161616-1616-1616-1616-161616161616", version: [1, 0, 0] }],
+    }),
+    "resource_packs/story/texts/en_US.lang": "story.welcome=Welcome traveler\n",
+  });
+  const project = await analyzeArchive(file);
+  translate(project, { "Welcome traveler": "旅人よ、ようこそ" });
+  const { zip, filename } = await outputZip(project, {
+    bedrockTranslationMode: "forced",
+  });
+  assert.match(filename, /\.ja_JP\.forced\.mcworld$/);
+  assert.match(
+    await zip.file("resource_packs/story/texts/en_US.lang").async("string"),
+    /旅人よ、ようこそ/,
+  );
+  assert.match(
+    await zip.file("resource_packs/story/texts/ja_JP.lang").async("string"),
+    /旅人よ、ようこそ/,
+  );
+  assert.equal(await zip.file("db/CURRENT").async("string"), "MANIFEST-000001\n");
+});
+
 test("Bedrock worlds translate commands and nested pack archives", async () => {
   const resources = new JSZip();
   resources.file("manifest.json", JSON.stringify({
@@ -352,6 +427,29 @@ test("Bedrock worlds translate commands and nested pack archives", async () => {
   );
   assert.match(await rebuilt.file("texts/ja_JP.lang").async("string"), /クエストガイド/);
   assert.equal(await zip.file("db/CURRENT").async("string"), "MANIFEST-000001\n");
+});
+
+test("forced Bedrock world output also replaces lang inside nested mcpack files", async () => {
+  const resources = new JSZip();
+  resources.file("manifest.json", JSON.stringify({
+    format_version: 2,
+    header: { name: "Nested", uuid: "17171717-1717-1717-1717-171717171717", version: [1, 0, 0] },
+    modules: [{ type: "resources", uuid: "18181818-1818-1818-1818-181818181818", version: [1, 0, 0] }],
+  }));
+  resources.file("texts/en_US.lang", "quest.guide=Quest guide\n");
+  const file = await archiveFile("NestedWorld.mcworld", {
+    "level.dat": new Uint8Array([8, 0, 0, 0]),
+    "db/CURRENT": "MANIFEST-000001\n",
+    "resource_packs/quest.mcpack": await resources.generateAsync({ type: "uint8array" }),
+  });
+  const project = await analyzeArchive(file);
+  translate(project, { "Quest guide": "クエストガイド" });
+  const { zip } = await outputZip(project, { bedrockTranslationMode: "forced" });
+  const rebuilt = await JSZip.loadAsync(
+    await zip.file("resource_packs/quest.mcpack").async("uint8array"),
+  );
+  assert.match(await rebuilt.file("texts/en_US.lang").async("string"), /クエストガイド/);
+  assert.match(await rebuilt.file("texts/ja_JP.lang").async("string"), /クエストガイド/);
 });
 
 test("Bedrock worlds translate LevelDB text through a checksummed additive log", async () => {

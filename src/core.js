@@ -2558,7 +2558,12 @@ async function buildArtifactBatchArchive(project, outputType) {
   };
 }
 
-export async function buildResourcePack(project, versionId = project.minecraftVersion, outputType = "blob") {
+export async function buildResourcePack(
+  project,
+  versionId = project.minecraftVersion,
+  outputType = "blob",
+  { bedrockTranslationMode = project.bedrockTranslationMode || "localized" } = {},
+) {
   const stats = getProjectStats(project);
   const game = project.game || "minecraft";
   if (project.artifactBatch) {
@@ -2575,6 +2580,7 @@ export async function buildResourcePack(project, versionId = project.minecraftVe
         document.format === "java-region-nbt"
           ? renderJavaWorldRegionDocument(document, entriesById, includeEntry)
           : renderMinecraftContentDocument(document, entriesById, includeEntry),
+      bedrockTranslationMode,
     });
   }
   if (game !== "minecraft") {

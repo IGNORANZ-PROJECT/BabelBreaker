@@ -64,6 +64,7 @@ const state = {
   busy: false,
   guideGame: "minecraft",
   minecraftGuideMode: "javaMod",
+  bedrockTranslationMode: "localized",
 };
 const CONTENT_KIND_LABELS = {
   patchouli: "Patchouli",
@@ -410,9 +411,17 @@ document.querySelector("#app").innerHTML = `
         <div class="entry-list" id="entry-list"></div>
         <button class="quiet-button load-more" id="load-more-button" type="button" hidden>${t("loadMore")}</button>
         <div class="download-row">
-          <div>
+          <div class="download-summary">
             <strong id="ready-title">${t("readyTitle")}</strong>
             <span id="ready-copy">${t("readyCopy")}</span>
+            <div class="bedrock-output-settings" id="bedrock-output-settings" hidden>
+              <label for="bedrock-output-mode">${t("bedrockOutputMode")}</label>
+              <select id="bedrock-output-mode">
+                <option value="localized">${t("bedrockLocalizedMode")}</option>
+                <option value="forced">${t("bedrockForcedMode")}</option>
+              </select>
+              <small id="bedrock-output-mode-copy">${t("bedrockLocalizedModeCopy")}</small>
+            </div>
           </div>
           <button class="primary-button download-button" id="download-button" type="button">
             ${icon("download", 18)} <span id="download-label">${t("downloadPack")}</span>
@@ -553,6 +562,9 @@ const elements = Object.fromEntries(
     "ready-copy",
     "download-button",
     "download-label",
+    "bedrock-output-settings",
+    "bedrock-output-mode",
+    "bedrock-output-mode-copy",
     "guide-step",
     "minecraft-guide-tabs",
     "guide-title",
@@ -627,6 +639,27 @@ function setBusy(busy) {
   elements["download-button"].disabled = busy;
   elements["reset-button"].disabled = busy;
   elements["target-language"].disabled = busy;
+  elements["bedrock-output-mode"].disabled = busy;
+}
+
+function supportsForcedBedrockOutput(project = state.project) {
+  return Boolean(
+    project &&
+    ["bedrock_addon", "bedrock_world"].includes(project.artifactType) &&
+    (project.documents || []).some((document) => document.format === "bedrock-lang"),
+  );
+}
+
+function updateBedrockOutputMode() {
+  const supported = supportsForcedBedrockOutput();
+  elements["bedrock-output-settings"].hidden = !supported;
+  if (!supported) state.bedrockTranslationMode = "localized";
+  elements["bedrock-output-mode"].value = state.bedrockTranslationMode;
+  elements["bedrock-output-mode-copy"].textContent = t(
+    state.bedrockTranslationMode === "forced"
+      ? "bedrockForcedModeCopy"
+      : "bedrockLocalizedModeCopy",
+  );
 }
 
 function currentTarget() {
@@ -936,6 +969,7 @@ function renderProject({ scroll = true } = {}) {
   elements["ready-title"].textContent = t(outputCopy.title);
   elements["ready-copy"].textContent = t(outputCopy.copy);
   elements["download-label"].textContent = t(outputCopy.download);
+  updateBedrockOutputMode();
   elements["start-button"].disabled = stats.total === 0;
   elements["download-button"].disabled = stats.total === 0;
   const selectedGuide = selectGuideForProject(project);
@@ -1101,6 +1135,7 @@ async function loadFiles(fileList, { scroll = true } = {}) {
     return;
   }
   state.sourceFiles = files;
+  state.bedrockTranslationMode = "localized";
   clearNotice();
   elements["drop-zone"].classList.add("loading");
   elements["drop-zone"].querySelector("strong").textContent = t("analyzing");
@@ -1300,6 +1335,8 @@ async function downloadPack() {
     const { archive, filename } = await buildResourcePack(
       state.project,
       state.project.minecraftVersion,
+      "blob",
+      { bedrockTranslationMode: state.bedrockTranslationMode },
     );
     const url = URL.createObjectURL(archive);
     const anchor = document.createElement("a");
@@ -1328,6 +1365,7 @@ function resetWorkspace() {
   state.sourceFiles = [];
   state.filter = "warning";
   state.search = "";
+  state.bedrockTranslationMode = "localized";
   elements.workspace.hidden = true;
   elements["ui-language"].disabled = false;
   elements["ui-language"].removeAttribute("title");
@@ -1430,6 +1468,12 @@ elements["translation-paste"].addEventListener("drop", (event) => {
   if (file) loadTranslationFile(file);
 });
 elements["download-button"].addEventListener("click", downloadPack);
+elements["bedrock-output-mode"].addEventListener("change", (event) => {
+  state.bedrockTranslationMode = event.target.value === "forced"
+    ? "forced"
+    : "localized";
+  updateBedrockOutputMode();
+});
 elements["entry-search"].addEventListener("input", (event) => {
   state.search = event.target.value;
   state.visibleEntries = 100;
