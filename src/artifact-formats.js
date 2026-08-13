@@ -1,4 +1,5 @@
 import JSZip from "jszip";
+import { assertNativeOutputLayout } from "./output-validation.js";
 
 export const ARTIFACT_TYPES = {
   modpack: { id: "modpack", edition: "java", label: "MOD Pack" },
@@ -1099,6 +1100,10 @@ export async function buildArtifactArchive(project, {
       patch.file(`${base}/${document.outputPath}`, render(document));
     }
     patch.file("README.txt", "Back up the server, copy the plugins folder into the server directory, and restart the server.\nサーバーをバックアップし、pluginsフォルダーをサーバーへ上書きしてから再起動してください。\n");
+    await assertNativeOutputLayout(patch, {
+      kind: "server_plugin_patch",
+      label: project.fileName,
+    });
     return {
       archive: await patch.generateAsync(archiveOptions(outputType)),
       filename: `${String(project.fileName).replace(ARCHIVE_EXTENSION, "")}.${project.targetLocale}.plugin-translation.zip`,
@@ -1118,6 +1123,10 @@ export async function buildArtifactArchive(project, {
         overlay.file(path, replacement.bytes);
       }
     }
+    await assertNativeOutputLayout(overlay, {
+      kind: "java_resource_pack",
+      label: project.fileName,
+    });
     return {
       archive: await overlay.generateAsync(archiveOptions(outputType)),
       filename: `${String(project.fileName).replace(ARCHIVE_EXTENSION, "")}.${project.targetLocale}.zip`,
@@ -1129,6 +1138,8 @@ export async function buildArtifactArchive(project, {
   const rootPrefix = project.artifact?.rootPrefix || "";
   const normalizeRoot = Boolean(rootPrefix) && (
     project.artifactType === "data_pack" ||
+    project.artifactType === "java_world" ||
+    project.artifactType === "modpack" ||
     project.artifactType === "bedrock_world" ||
     (project.artifactType === "resource_pack" && project.edition === "bedrock")
   );
@@ -1234,6 +1245,11 @@ export async function buildArtifactArchive(project, {
           : "resourcepacks";
       root.file(`${folder}/BabelBreaker-${project.targetLocale}.zip`, await overlay.generateAsync(archiveOptions("uint8array")));
     }
+    await assertNativeOutputLayout(root, {
+      kind: "modpack",
+      variant: project.artifact.variant,
+      label: project.fileName,
+    });
     const archive = await root.generateAsync(archiveOptions(outputType));
     const original = translatedArchiveStem(project.fileName, project.targetLocale);
     return { archive, filename: `${original}.${project.targetLocale}${project.artifact.extension}` };
@@ -1276,6 +1292,11 @@ export async function buildArtifactArchive(project, {
   } else if (project.edition === "bedrock" && project.artifactType === "resource_pack") {
     const result = await validateBedrockPack(root, { label: project.fileName });
     if (!result.valid) throw new Error(`Bedrock pack output validation failed: ${result.errors.join(" ")}`);
+  } else if (["data_pack", "java_world", "bedrock_world"].includes(project.artifactType)) {
+    await assertNativeOutputLayout(root, {
+      kind: project.artifactType,
+      label: project.fileName,
+    });
   }
 
   const archive = await root.generateAsync(archiveOptions(outputType));

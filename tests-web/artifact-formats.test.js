@@ -888,8 +888,8 @@ test("Modrinth packs add one language overlay without rewriting nested MOD JARs"
   mod.file("license.txt", "Lowercase license path");
   const modBytes = await mod.generateAsync({ type: "uint8array" });
   const file = await archiveFile("Pack.mrpack", {
-    "modrinth.index.json": JSON.stringify({ formatVersion: 1, game: "minecraft", name: "Pack", versionId: "1", files: [], dependencies: { minecraft: "1.21.1" } }),
-    "overrides/mods/inside.jar": modBytes,
+    "Pack/modrinth.index.json": JSON.stringify({ formatVersion: 1, game: "minecraft", name: "Pack", versionId: "1", files: [], dependencies: { minecraft: "1.21.1" } }),
+    "Pack/overrides/mods/inside.jar": modBytes,
   });
   const project = await analyzeArchive(file);
   assert.equal(project.artifactType, "modpack");
@@ -955,9 +955,9 @@ test("Java world archives rebuild nested resources.zip and keep world data", asy
   resources.file("pack.mcmeta", JSON.stringify({ pack: { pack_format: 34, description: "World resources" } }));
   resources.file("assets/world/lang/en_us.json", JSON.stringify({ "world.guide": "World Guide" }));
   const file = await archiveFile("Map.zip", {
-    "level.dat": new Uint8Array([1, 2, 3]),
-    "region/r.0.0.mca": new Uint8Array([4, 5, 6]),
-    "resources.zip": await resources.generateAsync({ type: "uint8array" }),
+    "Map/level.dat": new Uint8Array([1, 2, 3]),
+    "Map/region/r.0.0.mca": new Uint8Array([4, 5, 6]),
+    "Map/resources.zip": await resources.generateAsync({ type: "uint8array" }),
   });
   const project = await analyzeArchive(file);
   assert.equal(project.artifactType, "java_world");

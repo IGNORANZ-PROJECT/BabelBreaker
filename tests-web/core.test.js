@@ -567,12 +567,12 @@ test("JAR analysis tracks different source languages per namespace", async () =>
 test("Factorio locale CFG is exported inside a complete translated mod ZIP", async () => {
   const project = await analyzeArchive(
     await makeArchiveFile("example-factorio_1.0.0.zip", {
-      "example-factorio_1.0.0/info.json": JSON.stringify({
+      "info.json": JSON.stringify({
         name: "example-factorio",
         title: "Example Factorio Mod",
         version: "1.0.0",
       }),
-      "example-factorio_1.0.0/locale/en/base.cfg":
+      "locale/en/base.cfg":
         "[item-name]\nexample-item=Example item\n\n[mod-setting-name]\nexample=Example setting\n",
     }),
   );
@@ -604,12 +604,12 @@ test("Factorio locale CFG is exported inside a complete translated mod ZIP", asy
 test("Stardew Valley i18n is exported inside a complete translated mod ZIP", async () => {
   const project = await analyzeArchive(
     await makeArchiveFile("ExampleStardew.zip", {
-      "ExampleStardew/manifest.json": JSON.stringify({
+      "manifest.json": JSON.stringify({
         Name: "Example Stardew Mod",
         UniqueID: "Example.Author.Mod",
         Version: "2.0.0",
       }),
-      "ExampleStardew/i18n/default.json": JSON.stringify({
+      "i18n/default.json": JSON.stringify({
         greeting: "Welcome to the farm!",
       }),
     }),
@@ -622,12 +622,13 @@ test("Stardew Valley i18n is exported inside a complete translated mod ZIP", asy
   project.entries[0].status = "edited";
   const { archive, filename } = await buildResourcePack(project, undefined, "nodebuffer");
   const zip = await JSZip.loadAsync(archive, { checkCRC32: true });
+  const stardewRoot = "Example.Author.Mod";
   assert.deepEqual(
-    JSON.parse(await zip.file("ExampleStardew/i18n/de.json").async("string")),
+    JSON.parse(await zip.file(`${stardewRoot}/i18n/de.json`).async("string")),
     { greeting: "Willkommen auf dem Bauernhof!" },
   );
-  assert.ok(zip.file("ExampleStardew/manifest.json"));
-  assert.ok(zip.file("ExampleStardew/i18n/default.json"));
+  assert.ok(zip.file(`${stardewRoot}/manifest.json`));
+  assert.ok(zip.file(`${stardewRoot}/i18n/default.json`));
   const rebuilt = await analyzeArchive(new File([archive], filename));
   assert.equal(rebuilt.game, "stardew");
   assert.equal(rebuilt.mod.id, "Example.Author.Mod");

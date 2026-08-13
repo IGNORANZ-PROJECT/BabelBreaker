@@ -1,4 +1,5 @@
 import JSZip from "jszip";
+import { assertNativeOutputLayout } from "./output-validation.js";
 import {
   createLocalTranslator,
   getLocalTranslatorStatus,
@@ -2427,7 +2428,28 @@ async function buildSingleGameArchive(project, outputType) {
     }
     const readmePath = `${project.mod.root || ""}_BABEL_BREAKER_README.txt`;
     zip.file(readmePath, fullModReadme(project, stats));
-    const archive = await zip.generateAsync(
+    const currentRoot = String(project.mod.root || "").replace(/\/$/, "");
+    const desiredRoot = game === "factorio"
+      ? `${sanitizeFileName(project.mod.id)}_${sanitizeFileName(project.mod.version)}`
+      : currentRoot && !currentRoot.includes("/")
+        ? currentRoot
+        : sanitizeFileName(project.mod.id || project.mod.name);
+    let nativeZip = zip;
+    if (currentRoot !== desiredRoot) {
+      nativeZip = new JSZip();
+      for (const entry of Object.values(zip.files)) {
+        if (entry.dir) continue;
+        const relativePath = currentRoot && entry.name.startsWith(`${currentRoot}/`)
+          ? entry.name.slice(currentRoot.length + 1)
+          : entry.name;
+        nativeZip.file(`${desiredRoot}/${relativePath}`, await entry.async("uint8array"));
+      }
+    }
+    await assertNativeOutputLayout(nativeZip, {
+      kind: game,
+      label: project.fileName,
+    });
+    const archive = await nativeZip.generateAsync(
       archiveGenerationOptions(outputType),
     );
     const filename =
@@ -2472,6 +2494,10 @@ async function buildSingleGameArchive(project, outputType) {
         "",
       ].join("\n"),
     );
+    await assertNativeOutputLayout(zip, {
+      kind: "rimworld",
+      label: project.fileName,
+    });
     const archive = await zip.generateAsync(
       archiveGenerationOptions(outputType),
     );
