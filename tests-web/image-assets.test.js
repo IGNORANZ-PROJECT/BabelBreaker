@@ -58,6 +58,6 @@ test("edited Bedrock images return to the same nested path and container", async
   }];
   const result = await buildResourcePack(project, project.minecraftVersion, "uint8array");
   const output = await JSZip.loadAsync(result.archive);
-  const nested = await JSZip.loadAsync(await output.file("packs/UI.mcpack").async("uint8array"));
+  const nested = await JSZip.loadAsync(await output.file("UI.mcpack").async("uint8array"));
   assert.deepEqual(await nested.file("textures/ui/title.png").async("uint8array"), replacementBytes);
 });
