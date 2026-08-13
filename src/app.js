@@ -217,7 +217,8 @@ document.querySelector("#app").innerHTML = `
       </div>
 
       <div class="drop-shell">
-        <input id="mod-file" type="file" accept=".jar,.zip,.mrpack,.mcpack,.mcaddon,.mcworld,application/java-archive,application/zip" multiple hidden />
+        <!-- Safari may disable ZIP-based game formats when accept filters are present. Validation runs after selection instead. -->
+        <input id="mod-file" type="file" multiple hidden />
         <button class="drop-zone" id="drop-zone" type="button" data-testid="drop-zone">
           <span class="drop-icon">${icon("upload", 30)}</span>
           <strong>${t("dropTitle")}</strong>

@@ -106,6 +106,18 @@ test("required Web assets are present", async () => {
   }
 });
 
+test("the archive picker stays usable for ZIP-based game extensions in Safari", async () => {
+  const app = await read("src/app.js");
+  const picker = app.match(/<input id="mod-file"[^>]*>/)?.[0] || "";
+  assert.match(picker, /type="file"/);
+  assert.match(picker, /multiple/);
+  assert.doesNotMatch(picker, /\baccept=/);
+  assert.match(
+    await read("src/core.js"),
+    /\(jar\|zip\|mrpack\|mcpack\|mcaddon\|mcworld\)/,
+  );
+});
+
 test("public SEO metadata is complete and crawlable", async () => {
   const html = await read("index.html");
   assert.match(html, /rel="canonical" href="https:\/\/babel-breaker\.web\.app\/"/);
