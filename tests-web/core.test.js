@@ -1147,6 +1147,44 @@ test("translation rechecks a Japanese entry incorrectly marked as English", asyn
   assert.equal(stats.pending, 0);
 });
 
+test("a manually confirmed source language overrides automatic script detection", async () => {
+  const source = "指揮官さま、お買い物をしてくれないと、私の稼ぎがなくなりますわ！";
+  const project = {
+    targetLanguage: "ja",
+    namespaces: [],
+    entries: [
+      {
+        source,
+        sourceLanguage: "en",
+        declaredSourceLanguage: "en",
+        detectedSourceLanguage: "ja",
+        languageConfirmed: true,
+        translationBlocked: false,
+        sourceLocale: "en_us",
+        translation: "",
+        status: "pending",
+        warning: "",
+      },
+    ],
+  };
+  let calls = 0;
+
+  await translateProject(project, {
+    translator: {
+      async translate() {
+        calls += 1;
+        return "手動指定に基づく翻訳";
+      },
+    },
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(project.entries[0].sourceLanguage, "en");
+  assert.equal(project.entries[0].languageConfidence, "manual");
+  assert.equal(project.entries[0].translation, "手動指定に基づく翻訳");
+  assert.equal(project.entries[0].status, "translated");
+});
+
 test("translation rejects replacement characters instead of accepting mojibake", async () => {
   const project = {
     targetLanguage: "ja",

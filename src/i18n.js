@@ -334,6 +334,7 @@ const rows = {
   finishSelection: ["Finish selection", "選択を終了", "선택 종료", "结束选择", "Terminar selección"],
   translationEnabled: ["Translate", "翻訳する", "번역", "翻译", "Traducir"],
   applySelection: ["Apply", "適用", "적용", "应用", "Aplicar"],
+  applyingSelection: ["Applying…", "適用中…", "적용 중…", "正在应用…", "Aplicando…"],
   selectedImages: ["{count} image(s) selected", "画像を{count}枚選択", "이미지 {count}개 선택", "已选择 {count} 张图片", "{count} imágenes seleccionadas"],
   imageOptionTitle: ["Translate text inside images", "画像内の文字も翻訳", "이미지 속 문자도 번역", "同时翻译图片文字", "Traducir texto dentro de imágenes"],
   imageOptionCopy: ["Optional. Images are found, read, translated, and fitted automatically. Manual controls are only for adjustments.", "任意。画像の探索・文字認識・翻訳・配置を自動で行います。手動操作は結果の調整だけです。", "선택 사항입니다. 이미지 검색, 문자 인식, 번역, 배치를 자동으로 처리하며 수동 조작은 조정에만 사용합니다.", "可选。自动查找图片、识别和翻译文字并完成排版，手动操作仅用于调整。", "Opcional. Busca, reconoce, traduce y coloca el texto automáticamente; los controles manuales son solo para ajustes."],

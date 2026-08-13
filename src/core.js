@@ -205,7 +205,17 @@ function ensureEntryLanguageMetadata(entry) {
     declaredSourceLanguage,
   );
   const languageConfirmed = Boolean(entry.languageConfirmed);
+  const manuallyConfirmedLanguage = languageConfirmed
+    ? declaredSourceLanguage || entry.sourceLanguage || null
+    : null;
   Object.assign(entry, classified, {
+    ...(manuallyConfirmedLanguage
+      ? {
+          declaredSourceLanguage: manuallyConfirmedLanguage,
+          sourceLanguage: manuallyConfirmedLanguage,
+          languageConfidence: "manual",
+        }
+      : {}),
     languageConfirmed,
     translationBlocked:
       classified.translationBlocked &&

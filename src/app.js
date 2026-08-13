@@ -1497,13 +1497,14 @@ async function setSelectedEntryLanguage() {
   if (!selected.length) return;
   const sourceLanguage = elements["bulk-source-language"].value;
   const translationEnabled = elements["bulk-translation-toggle"].checked;
+  const applyButton = elements["apply-bulk-source-language"];
+  const scrollPosition = window.scrollY;
   if (!translationEnabled) {
     for (const entry of selected) entry.ignored = true;
     state.selectedEntryIds.clear();
-    state.textSelectionMode = false;
-    elements["text-selection-button"].textContent = t("selectItems");
     renderEntries();
     updateProjectSummary();
+    requestAnimationFrame(() => window.scrollTo({ top: scrollPosition }));
     return;
   }
   const temporaryProject = {
@@ -1525,18 +1526,26 @@ async function setSelectedEntryLanguage() {
     })),
   };
   setBusy(true);
+  applyButton.disabled = true;
+  applyButton.textContent = t("applyingSelection");
   try {
     await translateProject(temporaryProject, { glossaryText: elements.glossary.value });
     const translated = new Map(temporaryProject.entries.map((entry) => [entry.id, entry]));
     for (const entry of selected) Object.assign(entry, translated.get(entry.id));
+    const failures = temporaryProject.entries.filter((entry) => entry.warning).length;
     state.selectedEntryIds.clear();
-    state.textSelectionMode = false;
-    elements["text-selection-button"].textContent = t("selectItems");
     renderEntries();
-    showNotice(t("translationComplete"), "success");
+    updateProjectSummary();
+    requestAnimationFrame(() => window.scrollTo({ top: scrollPosition }));
+    showNotice(
+      failures ? t("translationFailures", { count: failures }) : t("translationComplete"),
+      failures ? "warning" : "success",
+    );
   } catch (error) {
     showNotice(localizeError(error), "error");
   } finally {
+    applyButton.disabled = false;
+    applyButton.textContent = t("applySelection");
     setBusy(false);
   }
 }
@@ -2370,7 +2379,10 @@ elements["entry-list"].addEventListener("click", (event) => {
   renderEntries();
   updateProjectSummary();
 });
-elements["apply-bulk-source-language"].addEventListener("click", setSelectedEntryLanguage);
+elements["apply-bulk-source-language"].addEventListener("click", (event) => {
+  event.preventDefault();
+  setSelectedEntryLanguage();
+});
 elements["ignore-ambiguous-button"].addEventListener("click", () => {
   if (!state.project) return;
   for (const entry of state.project.entries) {
