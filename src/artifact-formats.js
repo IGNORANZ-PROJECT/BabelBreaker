@@ -738,7 +738,6 @@ export async function validateBedrockPack(zip, { label = "Bedrock pack" } = {}) 
     return { valid: false, errors, warnings, manifestPath: "" };
   }
   const manifestEntry = manifests[0];
-  const packPrefix = manifestEntry.name.slice(0, -"manifest.json".length);
   const manifest = await readJson(manifestEntry);
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     errors.push(`${label}: manifest.json is not valid JSON.`);
@@ -767,38 +766,15 @@ export async function validateBedrockPack(zip, { label = "Bedrock pack" } = {}) 
       if (uuids.has(uuid)) errors.push(`${prefix} uuid is duplicated.`);
       uuids.add(uuid);
       if (!validBedrockVersion(module?.version)) errors.push(`${prefix} version is invalid.`);
-      if (module?.type === "script") {
-        if (module.language !== "javascript") {
-          errors.push(`${prefix} script language must be javascript.`);
-        }
-        const entryPath = String(module.entry || "");
-        if (!entryPath || !safePath(entryPath)) {
-          errors.push(`${prefix} script entry is invalid.`);
-        } else if (!zip.file(`${packPrefix}${entryPath}`)) {
-          errors.push(`${prefix} script entry does not exist: ${entryPath}.`);
-        }
-      }
     });
   }
   for (const [index, dependency] of (Array.isArray(manifest.dependencies) ? manifest.dependencies : []).entries()) {
-    if (dependency?.module_name && !String(dependency.module_name).startsWith("@minecraft/")) {
-      errors.push(`${label}: dependency ${index + 1} module_name is unsupported.`);
-    }
     if (dependency?.uuid && !BEDROCK_UUID.test(String(dependency.uuid))) {
       errors.push(`${label}: dependency ${index + 1} uuid is invalid.`);
     }
     if (dependency?.uuid && !validBedrockVersion(dependency.version)) {
       errors.push(`${label}: dependency ${index + 1} version is invalid.`);
     }
-  }
-  if ((manifest.capabilities || []).includes("script_eval")) {
-    errors.push(`${label}: deprecated script_eval capability is unsupported.`);
-  }
-  const hasPbrTextures = Object.values(zip.files).some(
-    (entry) => !entry.dir && entry.name.startsWith(packPrefix) && /\.texture_set\.json$/i.test(entry.name),
-  );
-  if (hasPbrTextures && !(manifest.capabilities || []).includes("pbr")) {
-    errors.push(`${label}: pbr capability is required for texture_set files.`);
   }
   return {
     valid: errors.length === 0,
@@ -813,32 +789,33 @@ export async function validateBedrockAddonArchive(zip, { label = "Bedrock Add-on
   const warnings = [];
   const packs = [];
   const outerFiles = Object.values(zip.files).filter((entry) => !entry.dir);
-  const looseManifests = manifestEntries(zip);
-  if (looseManifests.length) {
-    errors.push(`${label}: .mcaddon must contain .mcpack files instead of loose pack folders.`);
+  const addPack = async (packZip, name) => {
+    const result = await validateBedrockPack(packZip, { label: `${label} (${name})` });
+    errors.push(...result.errors);
+    warnings.push(...result.warnings);
+    if (!result.valid) return;
+    const manifestEntry = manifestEntries(packZip)[0];
+    packs.push({ name, manifest: await readJson(manifestEntry) });
+  };
+
+  for (const manifestEntry of manifestEntries(zip)) {
+    const prefix = manifestEntry.name.slice(0, -"manifest.json".length);
+    const packZip = new JSZip();
+    for (const entry of outerFiles) {
+      if (!entry.name.startsWith(prefix)) continue;
+      packZip.file(entry.name.slice(prefix.length), await entry.async("uint8array"));
+    }
+    await addPack(packZip, prefix.replace(/\/$/, "") || "root pack");
   }
 
-  for (const entry of outerFiles) {
-    if (/\.mcworld$/i.test(entry.name)) continue;
-    if (!/\.mcpack$/i.test(entry.name)) {
-      errors.push(`${label}: unsupported file at .mcaddon root: ${entry.name}.`);
-      continue;
-    }
-    if (entry.name.includes("/")) {
-      errors.push(`${label}: .mcpack must be stored at the .mcaddon root: ${entry.name}.`);
-    }
+  for (const entry of outerFiles.filter((item) => /\.(?:mcpack|zip)$/i.test(item.name))) {
     try {
       const packZip = await JSZip.loadAsync(await entry.async("uint8array"), {
         createFolders: false,
         checkCRC32: true,
       });
-      const result = await validateBedrockPack(packZip, { label: `${label} (${entry.name})` });
-      errors.push(...result.errors);
-      warnings.push(...result.warnings);
-      if (!result.valid) continue;
-      const manifestEntry = manifestEntries(packZip)[0];
-      const manifest = await readJson(manifestEntry);
-      packs.push({ name: entry.name, manifest });
+      if (!manifestEntries(packZip).length && /\.zip$/i.test(entry.name)) continue;
+      await addPack(packZip, entry.name);
     } catch (error) {
       errors.push(`${label}: ${entry.name} cannot be opened (${error.message}).`);
     }
@@ -907,219 +884,6 @@ function deterministicBedrockUuid(seed) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-function bedrockPackageFileName(prefix, index, usedNames) {
-  const folder = prefix.replace(/\/$/, "").split("/").at(-1) || `pack-${index + 1}`;
-  const stem = folder
-    .normalize("NFKC")
-    .replace(/[^\p{L}\p{N}._-]+/gu, "-")
-    .replace(/^-+|-+$/g, "") || `pack-${index + 1}`;
-  let name = `${stem}.mcpack`;
-  let suffix = 2;
-  while (usedNames.has(name.toLowerCase())) {
-    name = `${stem}-${suffix}.mcpack`;
-    suffix += 1;
-  }
-  usedNames.add(name.toLowerCase());
-  return name;
-}
-
-function validBedrockPackIcon(bytes) {
-  if (!(bytes instanceof Uint8Array) || bytes.length < 24) return false;
-  const signature = [137, 80, 78, 71, 13, 10, 26, 10];
-  if (!signature.every((byte, index) => bytes[index] === byte)) return false;
-  if (String.fromCharCode(...bytes.slice(12, 16)) !== "IHDR") return false;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const width = view.getUint32(16, false);
-  const height = view.getUint32(20, false);
-  return width === height && width >= 2 && width <= 256 && (width & (width - 1)) === 0;
-}
-
-async function decodeBedrockPackIcon(blob) {
-  if (typeof createImageBitmap === "function") return createImageBitmap(blob);
-  if (typeof document === "undefined" || typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
-    return null;
-  }
-  const url = URL.createObjectURL(blob);
-  try {
-    const image = new Image();
-    await new Promise((resolve, reject) => {
-      image.onload = resolve;
-      image.onerror = () => reject(new Error("pack_icon.png could not be decoded"));
-      image.src = url;
-    });
-    return image;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
-async function normalizeBedrockPackIcon(zip) {
-  const icon = zip.file("pack_icon.png");
-  if (!icon) return;
-  const bytes = await icon.async("uint8array");
-  if (validBedrockPackIcon(bytes)) return;
-  try {
-    const image = await decodeBedrockPackIcon(new Blob([bytes]));
-    if (!image) throw new Error("No image decoder is available");
-    const width = Number(image.width || image.naturalWidth);
-    const height = Number(image.height || image.naturalHeight);
-    if (!width || !height) throw new Error("The image has no dimensions");
-    const size = 256;
-    const sourceSize = Math.min(width, height);
-    const sourceX = (width - sourceSize) / 2;
-    const sourceY = (height - sourceSize) / 2;
-    let outputBlob;
-    if (typeof OffscreenCanvas === "function") {
-      const canvas = new OffscreenCanvas(size, size);
-      canvas.getContext("2d").drawImage(image, sourceX, sourceY, sourceSize, sourceSize, 0, 0, size, size);
-      outputBlob = await canvas.convertToBlob({ type: "image/png" });
-    } else if (typeof document !== "undefined") {
-      const canvas = document.createElement("canvas");
-      canvas.width = size;
-      canvas.height = size;
-      canvas.getContext("2d").drawImage(image, sourceX, sourceY, sourceSize, sourceSize, 0, 0, size, size);
-      outputBlob = await new Promise((resolve, reject) => canvas.toBlob(
-        (blob) => blob ? resolve(blob) : reject(new Error("pack_icon.png could not be encoded")),
-        "image/png",
-      ));
-    } else {
-      throw new Error("No canvas is available");
-    }
-    if (typeof image.close === "function") image.close();
-    const normalized = new Uint8Array(await outputBlob.arrayBuffer());
-    if (!validBedrockPackIcon(normalized)) throw new Error("Normalized icon is invalid");
-    zip.file("pack_icon.png", normalized);
-  } catch {
-    // A corrupt or mislabeled optional icon can make Minecraft reject a pack.
-    zip.remove("pack_icon.png");
-  }
-}
-
-async function sanitizeBedrockPack(zip) {
-  await normalizeBedrockPackIcon(zip);
-  const manifest = await readJson(zip.file("manifest.json"));
-  if (manifest && !(manifest.capabilities || []).includes("pbr")) {
-    for (const entry of Object.values(zip.files)) {
-      if (!entry.dir && /\.texture_set\.json$/i.test(entry.name)) zip.remove(entry.name);
-    }
-  }
-
-  const soundDefinitions = zip.file("sounds/sound_definitions.json");
-  if (soundDefinitions) {
-    try {
-      const definitions = JSON.parse(await soundDefinitions.async("string"));
-      let changed = false;
-      for (const definition of Object.values(definitions.sound_definitions || {})) {
-        if (!Array.isArray(definition?.sounds)) continue;
-        definition.sounds = definition.sounds.map((sound) => {
-          if (typeof sound !== "string") return sound;
-          changed = true;
-          return { name: sound };
-        });
-      }
-      if (changed) zip.file("sounds/sound_definitions.json", `${JSON.stringify(definitions, null, 2)}\n`);
-    } catch {
-      // Keep malformed source content unchanged; only unambiguous structures
-      // are normalized here.
-    }
-  }
-
-  for (const entry of Object.values(zip.files)) {
-    if (entry.dir) continue;
-    if (/^[^/]+\.json$/i.test(entry.name) && !/^manifest\.json$/i.test(entry.name)) {
-      const text = (await entry.async("string")).trim();
-      if (/^\/\*[\s\S]*\*\/$/.test(text)) zip.remove(entry.name);
-      continue;
-    }
-    if (/\.txt$/i.test(entry.name)) {
-      const text = await entry.async("string");
-      try {
-        const data = JSON.parse(text);
-        if (data?.format_version && Object.keys(data).some((key) => key.startsWith("minecraft:"))) {
-          zip.remove(entry.name);
-        }
-      } catch {
-        if (/^\s*\{/.test(text) && /"format_version"/.test(text) && /"minecraft:[^"]+"/.test(text)) {
-          zip.remove(entry.name);
-        }
-        // Ordinary text files, notices, and licenses are preserved.
-      }
-    }
-  }
-}
-
-async function canonicalizeBedrockAddon(zip, archiveOptions) {
-  const manifests = manifestEntries(zip);
-  const output = new JSZip();
-  const usedNames = new Set();
-  const prefixes = manifests
-    .map((entry) => entry.name.slice(0, -"manifest.json".length))
-    .sort((left, right) => right.length - left.length);
-
-  for (const [index, prefix] of prefixes.entries()) {
-    const pack = new JSZip();
-    for (const entry of Object.values(zip.files)) {
-      if (entry.dir || !entry.name.startsWith(prefix)) continue;
-      const relativePath = entry.name.slice(prefix.length);
-      if (!relativePath) continue;
-      pack.file(relativePath, await entry.async("uint8array"));
-    }
-    await sanitizeBedrockPack(pack);
-    output.file(
-      bedrockPackageFileName(prefix, index, usedNames),
-      await pack.generateAsync(archiveOptions("uint8array")),
-    );
-  }
-
-  for (const entry of Object.values(zip.files)) {
-    if (entry.dir || !/\.(?:zip|mcpack|mcworld)$/i.test(entry.name)) continue;
-    if (prefixes.some((prefix) => entry.name.startsWith(prefix))) continue;
-    const originalName = entry.name.split("/").at(-1);
-    const sourceExtension = originalName.match(/\.(?:zip|mcpack|mcworld)$/i)?.[0] || "";
-    const isWorld = /\.mcworld$/i.test(originalName);
-    let contents = await entry.async("uint8array");
-    let extension = isWorld ? ".mcworld" : ".mcpack";
-    if (!isWorld) {
-      try {
-        const nested = await JSZip.loadAsync(contents, { createFolders: false });
-        const nestedPrefix = await bedrockPackRootPrefix(nested);
-        if (nestedPrefix === null) continue;
-        if (nestedPrefix) {
-          const normalized = new JSZip();
-          for (const child of Object.values(nested.files)) {
-            if (child.dir || !child.name.startsWith(nestedPrefix)) continue;
-            normalized.file(child.name.slice(nestedPrefix.length), await child.async("uint8array"));
-          }
-          await sanitizeBedrockPack(normalized);
-          contents = await normalized.generateAsync(archiveOptions("uint8array"));
-        } else {
-          await sanitizeBedrockPack(nested);
-          contents = await nested.generateAsync(archiveOptions("uint8array"));
-        }
-      } catch {
-        if (!/\.mcpack$/i.test(originalName)) continue;
-      }
-    }
-    const stem = originalName.slice(0, -sourceExtension.length) || "pack";
-    let name = `${stem}${extension}`;
-    let suffix = 2;
-    while (usedNames.has(name.toLowerCase())) {
-      name = `${stem}-${suffix}${extension}`;
-      suffix += 1;
-    }
-    usedNames.add(name.toLowerCase());
-    output.file(name, contents);
-  }
-  return Object.keys(output.files).length ? output : zip;
-}
-
-function nearestManifestPath(zip, documentPath) {
-  return manifestEntries(zip)
-    .map((entry) => entry.name)
-    .filter((path) => documentPath.startsWith(path.slice(0, -"manifest.json".length)))
-    .sort((left, right) => right.length - left.length)[0] || "";
-}
-
 async function prepareBedrockVersionPlan(project, rootZip) {
   if (project.artifactType === "bedrock_world" || project.edition !== "bedrock") return null;
   const containers = [{ id: "root", zip: rootZip }];
@@ -1147,37 +911,34 @@ async function prepareBedrockVersionPlan(project, rootZip) {
     }
   }
 
-  const repairs = new Set();
-  const usedUuids = new Set(
-    records
-      .map((record) => String(record.manifest.header?.uuid || "").toLowerCase())
-      .filter((uuid) => BEDROCK_UUID.test(uuid)),
-  );
+  // A translated pack is a separate installable copy. Reusing the source UUID
+  // makes a later download fail whenever Minecraft still has an older export
+  // installed, even if the browser cache or world was cleared.
+  const exportNonce = globalThis.crypto?.randomUUID?.()
+    || `${Date.now()}-${Math.random()}`;
+  const headerUuids = new Map();
+  const rekeys = new Map();
   for (const record of records) {
     const container = containers.find((item) => item.id === record.containerId);
-    for (const [moduleIndex, module] of (record.manifest.modules || []).entries()) {
-      const uuid = String(module?.uuid || "").toLowerCase();
-      if (BEDROCK_UUID.test(uuid) && usedUuids.has(uuid)) {
-        let attempt = 0;
-        let replacement;
-        do {
-          replacement = deterministicBedrockUuid(`${record.key}:module:${moduleIndex}:${uuid}:${attempt}`);
-          attempt += 1;
-        } while (usedUuids.has(replacement));
-        module.uuid = replacement;
-        repairs.add(record.key);
-        usedUuids.add(replacement);
-      } else if (BEDROCK_UUID.test(uuid)) {
-        usedUuids.add(uuid);
-      }
-
+    const sourceHeaderUuid = String(record.manifest.header?.uuid || "").toLowerCase();
+    const headerUuid = deterministicBedrockUuid(`${exportNonce}:${record.key}:header`);
+    const moduleUuids = (record.manifest.modules || []).map((_, moduleIndex) =>
+      deterministicBedrockUuid(`${exportNonce}:${record.key}:module:${moduleIndex}`));
+    rekeys.set(record.key, { headerUuid, moduleUuids });
+    if (BEDROCK_UUID.test(sourceHeaderUuid) && !headerUuids.has(sourceHeaderUuid)) {
+      headerUuids.set(sourceHeaderUuid, headerUuid);
+    }
+    for (const dependency of record.manifest.dependencies || []) {
+      if (!String(dependency?.module_name || "").startsWith("@minecraft/")) continue;
+      const stableVersion = String(dependency.version || "").match(/^(\d+\.\d+\.\d+)-beta$/i)?.[1];
+      if (stableVersion) dependency.version = stableVersion;
+    }
+    for (const module of record.manifest.modules || []) {
       if (module?.type !== "script") continue;
       if (String(module.language || "").toLowerCase() === "javascript" && module.language !== "javascript") {
         module.language = "javascript";
-        repairs.add(record.key);
       } else if (!module.language) {
         module.language = "javascript";
-        repairs.add(record.key);
       }
       const entryPath = String(module.entry || "");
       if (
@@ -1188,60 +949,11 @@ async function prepareBedrockVersionPlan(project, rootZip) {
         container.zip.file(`${record.prefix}scripts/${entryPath}`)
       ) {
         module.entry = `scripts/${entryPath}`;
-        repairs.add(record.key);
       }
     }
-
-    if (Array.isArray(record.manifest.capabilities) && record.manifest.capabilities.includes("script_eval")) {
-      record.manifest.capabilities = record.manifest.capabilities.filter((capability) => capability !== "script_eval");
-      if (!record.manifest.capabilities.length) delete record.manifest.capabilities;
-      repairs.add(record.key);
-    }
-    if (Array.isArray(record.manifest.dependencies)) {
-      const dependencies = record.manifest.dependencies.filter(
-        (dependency) => !["mojang-minecraft", "mojang-gametest"].includes(String(dependency?.module_name || "")),
-      );
-      if (dependencies.length !== record.manifest.dependencies.length) {
-        record.manifest.dependencies = dependencies;
-        repairs.add(record.key);
-      }
-    }
-
   }
 
-  const changed = new Set();
-  for (const document of project.documents || []) {
-    const container = containers.find((item) => item.id === document.containerId);
-    if (!container) continue;
-    const path = nearestManifestPath(container.zip, document.outputPath);
-    if (path) changed.add(`${container.id}:${path}`);
-  }
-
-  const versions = new Map();
-  const ensureVersion = (record) => {
-    if (!record?.uuid || !record.version || record.version.length < 3) return false;
-    if (!versions.has(record.uuid)) {
-      const next = [...record.version];
-      next[2] = Number.isFinite(next[2]) ? next[2] + 1 : 1;
-      versions.set(record.uuid, next);
-    }
-    return true;
-  };
-  records.filter((record) => changed.has(record.key)).forEach(ensureVersion);
-
-  let expanded = true;
-  while (expanded) {
-    expanded = false;
-    for (const record of records) {
-      if (changed.has(record.key)) continue;
-      const dependsOnChangedPack = (record.manifest.dependencies || []).some((dependency) => dependency?.uuid && versions.has(dependency.uuid));
-      if (!dependsOnChangedPack) continue;
-      changed.add(record.key);
-      ensureVersion(record);
-      expanded = true;
-    }
-  }
-  return { records, changed, versions, repairs };
+  return { records, headerUuids, rekeys };
 }
 
 async function applyBedrockVersionPlan(zip, containerId, plan, { rootPrefix = "", normalizeRoot = false } = {}) {
@@ -1249,29 +961,22 @@ async function applyBedrockVersionPlan(zip, containerId, plan, { rootPrefix = ""
   let modified = false;
   for (const record of plan.records.filter((item) => item.containerId === containerId)) {
     const manifest = cloneJson(record.manifest);
-    let changed = plan.repairs.has(record.key);
-    const nextVersion = plan.versions.get(record.uuid);
-    if (plan.changed.has(record.key) && nextVersion) {
-      manifest.header.version = [...nextVersion];
-      for (const module of manifest.modules || []) {
-        if (Array.isArray(module.version)) module.version = [...nextVersion];
-      }
-      changed = true;
-    }
+    const rekey = plan.rekeys.get(record.key);
+    if (!rekey) continue;
+    manifest.header.uuid = rekey.headerUuid;
+    (manifest.modules || []).forEach((module, index) => {
+      module.uuid = rekey.moduleUuids[index];
+    });
     for (const dependency of manifest.dependencies || []) {
-      const dependencyVersion = dependency?.uuid && plan.versions.get(dependency.uuid);
-      if (dependencyVersion && Array.isArray(dependency.version)) {
-        dependency.version = [...dependencyVersion];
-        changed = true;
-      }
+      const dependencyUuid = dependency?.uuid
+        && plan.headerUuids.get(String(dependency.uuid).toLowerCase());
+      if (dependencyUuid) dependency.uuid = dependencyUuid;
     }
-    if (changed) {
-      const outputPath = normalizeRoot && record.path.startsWith(rootPrefix)
-        ? record.path.slice(rootPrefix.length)
-        : record.path;
-      zip.file(outputPath, `${JSON.stringify(manifest, null, 2)}\n`);
-      modified = true;
-    }
+    const outputPath = normalizeRoot && record.path.startsWith(rootPrefix)
+      ? record.path.slice(rootPrefix.length)
+      : record.path;
+    zip.file(outputPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    modified = true;
   }
   return modified;
 }
@@ -1446,20 +1151,16 @@ export async function buildArtifactArchive(project, {
   for (const container of project.artifactState.containers.filter((item) => item.parentId === "root")) {
     const childDocuments = documentsByContainer.get(container.id);
     const childImageReplacements = (project.imageReplacements || []).filter((item) => item.containerId === container.id);
-    const needsManifestUpdate = bedrockVersionPlan?.records.some((record) =>
-      record.containerId === container.id && (
-        bedrockVersionPlan.repairs.has(record.key) ||
-        bedrockVersionPlan.changed.has(record.key) ||
-        (record.manifest.dependencies || []).some((dependency) => dependency?.uuid && bedrockVersionPlan.versions.has(dependency.uuid))
-      ),
+    const needsManifestUpdate = bedrockVersionPlan?.records.some(
+      (record) => record.containerId === container.id,
     );
     if (!childDocuments?.length && !needsManifestUpdate && !childImageReplacements.length) continue;
     let child = await JSZip.loadAsync(container.sourceBytes, { createFolders: false });
     const childRootPrefix = project.artifactType === "bedrock_addon"
       ? container.rootPrefix || ""
       : "";
-    // Apply edits at the source paths first. Add-on packaging is canonicalized
-    // after every nested pack has been rebuilt.
+    // Keep the author's container filename, wrapper directory, and archive
+    // layout. Minecraft packs in the wild rely on both loose and nested forms.
     await applyDocuments(child, childDocuments);
     for (const replacement of childImageReplacements) child.file(replacement.path, replacement.bytes);
     await applyBedrockVersionPlan(child, container.id, bedrockVersionPlan, {
@@ -1473,13 +1174,11 @@ export async function buildArtifactArchive(project, {
   }
 
   if (project.artifactType === "bedrock_addon") {
-    root = await canonicalizeBedrockAddon(root, archiveOptions);
     const result = await validateBedrockAddonArchive(root, { label: project.fileName });
     if (!result.valid) {
       throw new Error(`Bedrock Add-on output validation failed: ${result.errors.join(" ")}`);
     }
   } else if (project.edition === "bedrock" && project.artifactType === "resource_pack") {
-    await sanitizeBedrockPack(root);
     const result = await validateBedrockPack(root, { label: project.fileName });
     if (!result.valid) throw new Error(`Bedrock pack output validation failed: ${result.errors.join(" ")}`);
   }
