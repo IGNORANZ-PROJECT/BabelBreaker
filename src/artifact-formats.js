@@ -153,6 +153,13 @@ export async function detectArtifactType(zip, fileName = "") {
     };
   }
 
+  // A .mcaddon may contain one or several unpacked pack folders. Respect the
+  // native container extension before classifying a single resource manifest
+  // as a standalone .mcpack.
+  if (/\.mcaddon$/i.test(lowerName)) {
+    return { ...ARTIFACT_TYPES.bedrock_addon, variant: "mcaddon", confidence: "high", rootPrefix: "" };
+  }
+
   if (manifestPath) {
     const bedrockManifests = [];
     for (const entry of entries.filter((item) => !item.dir && /(^|\/)manifest\.json$/i.test(item.name))) {
@@ -942,6 +949,7 @@ async function canonicalizeBedrockAddonArchive(root, archiveOptions, fileName) {
     canonical.file(
       uniqueBedrockPackName(preferredName, usedNames),
       await pack.generateAsync(archiveOptions("uint8array")),
+      { compression: "STORE", createFolders: false },
     );
   }
   for (const { entry, packZip, packRootPrefix } of nestedPacks) {
@@ -949,6 +957,7 @@ async function canonicalizeBedrockAddonArchive(root, archiveOptions, fileName) {
     canonical.file(
       uniqueBedrockPackName(entry.name, usedNames),
       await pack.generateAsync(archiveOptions("uint8array")),
+      { compression: "STORE", createFolders: false },
     );
   }
   return canonical;
@@ -974,6 +983,38 @@ function deterministicBedrockUuid(seed) {
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = bytes.map((byte) => byte.toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+const BEDROCK_DATA_FOLDERS = new Set([
+  "blocks", "dialogue", "entities", "features",
+  "feature_rules", "functions", "item_catalog", "items", "loot_tables",
+  "recipes", "spawn_rules", "structures", "trading",
+]);
+
+function hasBedrockDataContent(zip, prefix) {
+  return Object.values(zip.files).some((entry) => {
+    if (entry.dir || !entry.name.startsWith(prefix)) return false;
+    const relative = entry.name.slice(prefix.length);
+    return BEDROCK_DATA_FOLDERS.has(relative.split("/")[0].toLowerCase());
+  });
+}
+
+function hasBedrockPbrContent(zip, prefix) {
+  return Object.values(zip.files).some((entry) => (
+    !entry.dir &&
+    entry.name.startsWith(`${prefix}textures/`) &&
+    /\.texture_set\.json$/i.test(entry.name)
+  ));
+}
+
+function migrateLegacyBedrockScript(source) {
+  let output = String(source)
+    .replace(/(['"])mojang-minecraft\1/g, '"@minecraft/server"')
+    .replace(/\bserver\.world\.events\.tick\.subscribe\s*\(\s*\([^)]*\)\s*=>/g, "server.system.runInterval(() =>")
+    .replace(/new\s+server\.EntityQueryOptions\s*\(\s*\)/g, "{}")
+    .replace(/(['"])the end\1/g, '"the_end"');
+  const unsupported = /mojang-minecraft|\.world\.events\.|new\s+server\.EntityQueryOptions/.test(output);
+  return { output, supported: !unsupported };
 }
 
 async function prepareBedrockVersionPlan(project, rootZip) {
@@ -1013,6 +1054,66 @@ async function prepareBedrockVersionPlan(project, rootZip) {
   for (const record of records) {
     const container = containers.find((item) => item.id === record.containerId);
     const sourceHeaderUuid = String(record.manifest.header?.uuid || "").toLowerCase();
+    if (Array.isArray(record.manifest.capabilities)) {
+      record.manifest.capabilities = record.manifest.capabilities.filter(
+        (capability) => String(capability).toLowerCase() !== "script_eval",
+      );
+      if (!record.manifest.capabilities.length) delete record.manifest.capabilities;
+    }
+    if (
+      container &&
+      hasBedrockPbrContent(container.zip, record.prefix) &&
+      !(record.manifest.capabilities || []).includes("pbr")
+    ) {
+      record.manifest.capabilities ||= [];
+      record.manifest.capabilities.push("pbr");
+    }
+    if ((record.manifest.capabilities || []).includes("pbr")) {
+      const minimum = [1, 21, 120];
+      const current = Array.isArray(record.manifest.header?.min_engine_version)
+        ? record.manifest.header.min_engine_version.map(Number)
+        : [];
+      const isOlder = minimum.some((part, index) => (
+        part !== Number(current[index] || 0) &&
+        minimum.slice(0, index).every((prefixPart, prefixIndex) => prefixPart === Number(current[prefixIndex] || 0)) &&
+        Number(current[index] || 0) < part
+      ));
+      if (current.length !== 3 || isOlder) record.manifest.header.min_engine_version = minimum;
+    }
+    if (
+      container &&
+      hasBedrockDataContent(container.zip, record.prefix) &&
+      !(record.manifest.modules || []).some((module) => module?.type === "resources") &&
+      !(record.manifest.modules || []).some((module) => module?.type === "data")
+    ) {
+      record.manifest.modules ||= [];
+      record.manifest.modules.unshift({
+        type: "data",
+        uuid: deterministicBedrockUuid(`${exportNonce}:${record.key}:added-data-source`),
+        version: record.version || [1, 0, 0],
+      });
+    }
+    const legacyDependency = (record.manifest.dependencies || []).find(
+      (dependency) => dependency?.module_name === "mojang-minecraft",
+    );
+    record.scriptMigrations = [];
+    if (legacyDependency && container) {
+      let migrationSupported = true;
+      for (const entry of Object.values(container.zip.files)) {
+        if (entry.dir || !entry.name.startsWith(`${record.prefix}scripts/`) || !/\.js$/i.test(entry.name)) continue;
+        const migration = migrateLegacyBedrockScript(await entry.async("string"));
+        migrationSupported &&= migration.supported;
+        record.scriptMigrations.push({ path: entry.name, contents: migration.output });
+      }
+      if (!migrationSupported || !record.scriptMigrations.length) {
+        throw new Error(`${record.path}: legacy mojang-minecraft script could not be migrated safely.`);
+      }
+      const currentServerVersion = records
+        .flatMap((item) => item.manifest.dependencies || [])
+        .find((dependency) => dependency?.module_name === "@minecraft/server")?.version;
+      legacyDependency.module_name = "@minecraft/server";
+      legacyDependency.version = currentServerVersion || "2.2.0";
+    }
     const headerUuid = deterministicBedrockUuid(`${exportNonce}:${record.key}:header`);
     const moduleUuids = (record.manifest.modules || []).map((_, moduleIndex) =>
       deterministicBedrockUuid(`${exportNonce}:${record.key}:module:${moduleIndex}`));
@@ -1020,11 +1121,9 @@ async function prepareBedrockVersionPlan(project, rootZip) {
     if (BEDROCK_UUID.test(sourceHeaderUuid) && !headerUuids.has(sourceHeaderUuid)) {
       headerUuids.set(sourceHeaderUuid, headerUuid);
     }
-    for (const dependency of record.manifest.dependencies || []) {
-      if (!String(dependency?.module_name || "").startsWith("@minecraft/")) continue;
-      const stableVersion = String(dependency.version || "").match(/^(\d+\.\d+\.\d+)-beta$/i)?.[1];
-      if (stableVersion) dependency.version = stableVersion;
-    }
+    // Script API versions are compatibility declarations, not cosmetic
+    // metadata. In particular, a `-beta` dependency is a different API track
+    // and must never be silently converted to its stable-looking counterpart.
     for (const module of record.manifest.modules || []) {
       if (module?.type !== "script") continue;
       if (String(module.language || "").toLowerCase() === "javascript" && module.language !== "javascript") {
@@ -1067,6 +1166,12 @@ async function applyBedrockVersionPlan(zip, containerId, plan, { rootPrefix = ""
     const outputPath = normalizeRoot && record.path.startsWith(rootPrefix)
       ? record.path.slice(rootPrefix.length)
       : record.path;
+    for (const migration of record.scriptMigrations || []) {
+      const migrationPath = normalizeRoot && migration.path.startsWith(rootPrefix)
+        ? migration.path.slice(rootPrefix.length)
+        : migration.path;
+      zip.file(migrationPath, migration.contents);
+    }
     zip.file(outputPath, `${JSON.stringify(manifest, null, 2)}\n`);
     modified = true;
   }

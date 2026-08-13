@@ -86,6 +86,30 @@ async function outputZip(project, options) {
   };
 }
 
+async function outputBedrockPack(zip, preferredName) {
+  const stem = String(preferredName).replace(/\.(?:mcpack|zip)$/i, "").toLowerCase();
+  const nested = Object.values(zip.files).find((entry) => (
+    !entry.dir && entry.name.toLowerCase() === `${stem}.mcpack`
+  ));
+  if (nested) {
+    return JSZip.loadAsync(await nested.async("uint8array"), { checkCRC32: true });
+  }
+  const manifest = Object.values(zip.files).find((entry) => {
+    if (entry.dir || !/(^|\/)manifest\.json$/i.test(entry.name)) return false;
+    const folder = entry.name.slice(0, -"manifest.json".length).replace(/\/$/, "");
+    return folder && folder.split("/").pop().toLowerCase().startsWith(stem);
+  });
+  assert.ok(manifest, `Missing exported Bedrock pack folder for ${preferredName}`);
+  const prefix = manifest.name.slice(0, -"manifest.json".length);
+  const pack = new JSZip();
+  for (const entry of Object.values(zip.files)) {
+    if (!entry.dir && entry.name.startsWith(prefix)) {
+      pack.file(entry.name.slice(prefix.length), await entry.async("uint8array"));
+    }
+  }
+  return pack;
+}
+
 test("Java resource packs are detected and returned as a minimal translation overlay", async () => {
   const file = await archiveFile("CleanUI.zip", {
     "pack.mcmeta": JSON.stringify({ pack: { pack_format: 34, description: "Clean UI" } }),
@@ -209,10 +233,7 @@ test("mcaddon containers rebuild their nested packs", async () => {
   translate(project, { "Example Creature": "サンプルの生物" });
   const resultArchive = await outputZip(project);
   const { zip } = resultArchive;
-  const rebuilt = await JSZip.loadAsync(
-    await zip.file("Creatures-Resources.mcpack").async("uint8array"),
-    { checkCRC32: true },
-  );
+  const rebuilt = await outputBedrockPack(zip, "Creatures-Resources");
   assert.match(await rebuilt.file("texts/ja_JP.lang").async("string"), /サンプルの生物/);
   assert.match(await rebuilt.file("texts/en_US.lang").async("string"), /Example Creature/);
   assert.equal(
@@ -271,8 +292,8 @@ test("mcaddon accepts BOM, comments, and trailing commas in Bedrock manifests", 
   translate(project, { "Test item": "テストアイテム" });
   const resultArchive = await outputZip(project);
   const { zip } = resultArchive;
-  const rebuiltResource = await JSZip.loadAsync(await zip.file("TNW-R.mcpack").async("uint8array"));
-  const rebuiltBehavior = await JSZip.loadAsync(await zip.file("TNW-B.mcpack").async("uint8array"));
+  const rebuiltResource = await outputBedrockPack(zip, "TNW-R");
+  const rebuiltBehavior = await outputBedrockPack(zip, "TNW-B");
   const resourceManifest = JSON.parse(await rebuiltResource.file("manifest.json").async("string"));
   const behaviorManifest = JSON.parse(await rebuiltBehavior.file("manifest.json").async("string"));
   assert.deepEqual(resourceManifest.header.version, [1, 0, 0]);
@@ -332,11 +353,14 @@ test("mcaddon converts loose pack directories to root-level mcpack files", async
   const project = await analyzeArchive(file);
   assert.equal(project.artifactType, "bedrock_addon");
   translate(project, { "Original title": "翻訳タイトル" });
-  const { zip } = await outputZip(project);
+  const { zip, archive } = await outputZip(project);
   assert.equal(zip.file("RP/manifest.json"), null);
   assert.equal(zip.file("BP/manifest.json"), null);
-  const resourcePack = await JSZip.loadAsync(await zip.file("RP.mcpack").async("uint8array"), { checkCRC32: true });
-  const behaviorPack = await JSZip.loadAsync(await zip.file("BP.mcpack").async("uint8array"), { checkCRC32: true });
+  assert.ok(zip.file("RP.mcpack"));
+  assert.ok(zip.file("BP.mcpack"));
+  assert.equal(archive.readUInt16LE(8), 0, "nested .mcpack must be stored without outer recompression");
+  const resourcePack = await outputBedrockPack(zip, "RP");
+  const behaviorPack = await outputBedrockPack(zip, "BP");
   assert.ok(resourcePack.file("manifest.json"));
   assert.ok(behaviorPack.file("manifest.json"));
   assert.ok(behaviorPack.file("functions/start.mcfunction"));
@@ -344,8 +368,8 @@ test("mcaddon converts loose pack directories to root-level mcpack files", async
   const resourceManifest = JSON.parse(await resourcePack.file("manifest.json").async("string"));
   const behaviorManifest = JSON.parse(await behaviorPack.file("manifest.json").async("string"));
   assert.notEqual(resourceManifest.header.uuid, resourceUuid);
-  assert.equal(behaviorManifest.dependencies[0].version, "2.2.0");
-  assert.equal(behaviorManifest.dependencies[1].version, "2.1.0");
+  assert.equal(behaviorManifest.dependencies[0].version, "2.2.0-beta");
+  assert.equal(behaviorManifest.dependencies[1].version, "2.1.0-beta");
   assert.equal(behaviorManifest.dependencies[2].uuid, resourceManifest.header.uuid);
   assert.equal((await validateBedrockAddonArchive(zip, { requirePackArchives: true })).valid, true);
 });
@@ -362,13 +386,17 @@ test("mcaddon preserves legacy content while creating a separate translated iden
       capabilities: ["script_eval"],
     }),
     "TNW-B/scripts/main.js": "export function main() {}\n",
+    "TNW-B/items/example.json": JSON.stringify({
+      format_version: "1.21.0",
+      "minecraft:item": { description: { identifier: "test:example" }, components: {} },
+    }),
     "TNW-Patch-B/manifest.json": JSON.stringify({
       format_version: 2,
       header: { name: "Patch", description: "Patch", uuid: "74747474-7474-7474-7474-747474747474", version: [1, 0, 0] },
       modules: [{ type: "script", entry: "main.js", uuid: behaviorUuid, version: [1, 0, 0] }],
       dependencies: [{ module_name: "mojang-minecraft", version: "0.1.0" }],
     }),
-    "TNW-Patch-B/scripts/main.js": "import * as server from 'mojang-minecraft';\nexport function patch() {}\n",
+    "TNW-Patch-B/scripts/main.js": "import * as server from 'mojang-minecraft';\nserver.world.events.tick.subscribe(() => { const query = new server.EntityQueryOptions(); server.world.getDimension('the end').getEntities(query); });\n",
     "TNW-R/manifest.json": JSON.stringify({
       format_version: 2,
       header: { name: "Resources", description: "Resources", uuid: resourceUuid, version: [1, 0, 0] },
@@ -401,21 +429,28 @@ test("mcaddon preserves legacy content while creating a separate translated iden
   assert.equal(filename, "TNW-like.ja_JP.mcaddon");
   assert.equal((await validateBedrockAddonArchive(zip)).valid, true);
   assert.equal(zip.file("TNW-B/manifest.json"), null);
-  const behaviorPack = await JSZip.loadAsync(await zip.file("TNW-B.mcpack").async("uint8array"), { checkCRC32: true });
-  const patchPack = await JSZip.loadAsync(await zip.file("TNW-Patch-B.mcpack").async("uint8array"), { checkCRC32: true });
-  const resourcePack = await JSZip.loadAsync(await zip.file("TNW-R.mcpack").async("uint8array"), { checkCRC32: true });
+  const behaviorPack = await outputBedrockPack(zip, "TNW-B");
+  const patchPack = await outputBedrockPack(zip, "TNW-Patch-B");
+  const resourcePack = await outputBedrockPack(zip, "TNW-R");
 
   const behaviorManifest = JSON.parse(await behaviorPack.file("manifest.json").async("string"));
   const patchManifest = JSON.parse(await patchPack.file("manifest.json").async("string"));
-  assert.equal(behaviorManifest.modules[0].language, "javascript");
-  assert.deepEqual(behaviorManifest.capabilities, ["script_eval"]);
-  assert.equal(patchManifest.modules[0].language, "javascript");
-  assert.equal(patchManifest.modules[0].entry, "scripts/main.js");
-  assert.notEqual(patchManifest.modules[0].uuid, behaviorUuid);
-  assert.deepEqual(patchManifest.dependencies, [{ module_name: "mojang-minecraft", version: "0.1.0" }]);
-  assert.match(await patchPack.file("scripts/main.js").async("string"), /mojang-minecraft/);
+  assert.equal(behaviorManifest.modules.find((module) => module.type === "script").language, "javascript");
+  assert.ok(behaviorManifest.modules.some((module) => module.type === "data"));
+  assert.equal(behaviorManifest.capabilities, undefined);
+  const patchScriptModule = patchManifest.modules.find((module) => module.type === "script");
+  assert.equal(patchScriptModule.language, "javascript");
+  assert.equal(patchScriptModule.entry, "scripts/main.js");
+  assert.notEqual(patchScriptModule.uuid, behaviorUuid);
+  assert.deepEqual(patchManifest.dependencies, [{ module_name: "@minecraft/server", version: "2.2.0" }]);
+  assert.match(await patchPack.file("scripts/main.js").async("string"), /@minecraft\/server/);
+  assert.doesNotMatch(await patchPack.file("scripts/main.js").async("string"), /mojang-minecraft/);
+  assert.match(await patchPack.file("scripts/main.js").async("string"), /server\.system\.runInterval/);
+  assert.match(await patchPack.file("scripts/main.js").async("string"), /const query = \{\}/);
+  assert.match(await patchPack.file("scripts/main.js").async("string"), /the_end/);
   const resourceManifest = JSON.parse(await resourcePack.file("manifest.json").async("string"));
-  assert.equal(resourceManifest.capabilities, undefined);
+  assert.deepEqual(resourceManifest.capabilities, ["pbr"]);
+  assert.deepEqual(resourceManifest.header.min_engine_version, [1, 21, 120]);
   assert.ok(resourcePack.file("pack_icon.png"));
   assert.ok(resourcePack.file("textures/blocks/example.texture_set.json"));
   assert.deepEqual(
@@ -499,9 +534,7 @@ test("forced mcaddon output replaces the source lang but preserves omitted lines
     bedrockTranslationMode: "forced",
   });
   assert.match(filename, /\.ja_JP\.forced\.mcaddon$/);
-  const rebuilt = await JSZip.loadAsync(
-    await zip.file("Forced-Resources.mcpack").async("uint8array"),
-  );
+  const rebuilt = await outputBedrockPack(zip, "Forced-Resources");
   const sourceLang = await rebuilt.file("texts/en_US.lang").async("string");
   const targetLang = await rebuilt.file("texts/ja_JP.lang").async("string");
   assert.match(sourceLang, /entity\.example\.name=サンプルの生物/);
@@ -550,8 +583,10 @@ test("mcaddon converts nested Bedrock zip files to normalized mcpacks", async ()
   const { zip } = await outputZip(project);
   assert.equal(zip.file("ExampleR.zip"), null);
   assert.equal(zip.file("ExampleB.zip"), null);
-  const rebuiltResource = await JSZip.loadAsync(await zip.file("ExampleR.mcpack").async("uint8array"), { checkCRC32: true });
-  const rebuiltBehavior = await JSZip.loadAsync(await zip.file("ExampleB.mcpack").async("uint8array"), { checkCRC32: true });
+  assert.ok(zip.file("ExampleR.mcpack"));
+  assert.ok(zip.file("ExampleB.mcpack"));
+  const rebuiltResource = await outputBedrockPack(zip, "ExampleR");
+  const rebuiltBehavior = await outputBedrockPack(zip, "ExampleB");
   assert.ok(rebuiltResource.file("manifest.json"));
   assert.ok(rebuiltBehavior.file("manifest.json"));
   assert.match(await rebuiltResource.file("texts/ja_JP.lang").async("string"), /サンプルの生物/);
@@ -592,10 +627,8 @@ test("mcaddon normalizes unchanged wrapped pack archives", async () => {
   assert.equal(project.entries.length, 0);
   const { zip } = await outputZip(project);
   assert.equal(zip.file("StandaloneB.zip"), null);
-  const rebuilt = await JSZip.loadAsync(
-    await zip.file("StandaloneB.mcpack").async("uint8array"),
-    { checkCRC32: true },
-  );
+  assert.ok(zip.file("StandaloneB.mcpack"));
+  const rebuilt = await outputBedrockPack(zip, "StandaloneB");
   assert.ok(rebuilt.file("manifest.json"));
   assert.ok(rebuilt.file("functions/setup.mcfunction"));
   assert.equal((await validateBedrockAddonArchive(zip, { requirePackArchives: true })).valid, true);
@@ -625,8 +658,8 @@ test("mcaddon exports use fresh linked UUIDs without version regression", async 
   const project = await analyzeArchive(file);
   translate(project, { "Example Creature": "サンプルの生物" });
   const { zip } = await outputZip(project);
-  const rebuiltResource = await JSZip.loadAsync(await zip.file("Linked-Resources.mcpack").async("uint8array"));
-  const rebuiltBehavior = await JSZip.loadAsync(await zip.file("Linked-Behavior.mcpack").async("uint8array"));
+  const rebuiltResource = await outputBedrockPack(zip, "Linked-Resources");
+  const rebuiltBehavior = await outputBedrockPack(zip, "Linked-Behavior");
   const resourceManifest = JSON.parse(await rebuiltResource.file("manifest.json").async("string"));
   const behaviorManifest = JSON.parse(await rebuiltBehavior.file("manifest.json").async("string"));
   assert.notEqual(resourceManifest.header.uuid, resourceUuid);
@@ -637,7 +670,7 @@ test("mcaddon exports use fresh linked UUIDs without version regression", async 
   assert.deepEqual(behaviorManifest.dependencies[0].version, [1, 0, 0]);
 
   const second = await outputZip(project);
-  const secondResource = await JSZip.loadAsync(await second.zip.file("Linked-Resources.mcpack").async("uint8array"));
+  const secondResource = await outputBedrockPack(second.zip, "Linked-Resources");
   const secondManifest = JSON.parse(await secondResource.file("manifest.json").async("string"));
   assert.notEqual(secondManifest.header.uuid, resourceManifest.header.uuid);
 });

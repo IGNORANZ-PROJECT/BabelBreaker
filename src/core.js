@@ -2340,7 +2340,10 @@ function archiveGenerationOptions(type) {
     type,
     compression: "DEFLATE",
     compressionOptions: { level: 6 },
-    platform: "UNIX",
+    // Game archives are exchanged primarily with desktop and mobile clients.
+    // DOS ZIP attributes match Microsoft's Creator Tools output and avoid
+    // platform-specific Unix permission metadata in Bedrock imports.
+    platform: "DOS",
   };
 }
 
