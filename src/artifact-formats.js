@@ -402,9 +402,12 @@ async function bedrockLocalizationEvidence(zip, prefix, candidates, readText) {
       // Keep invalid so the UI can explain that compatibility is uncertain.
     }
   }
-  const declaresKnownLocale = declaredLocales.some((locale) => localeFiles.includes(locale));
   return {
-    confirmed: localeFiles.length > 1 || declaresKnownLocale,
+    // A single declared locale only proves that the pack can load that one
+    // file. It does not prove that Minecraft or the Add-on will switch to a
+    // newly-added locale. Require at least two existing locale files before
+    // recommending a non-destructive localized copy.
+    confirmed: localeFiles.length > 1,
     languageFileCount: localeFiles.length,
     languagesJson,
     declaredLocales,

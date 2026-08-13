@@ -31,6 +31,11 @@ import {
   detectUiLocale,
 } from "./i18n.js";
 import { selectGuideForProject } from "./guide-selection.js";
+import {
+  bedrockLocalizationSummary,
+  recommendedBedrockOutputMode,
+  supportsForcedBedrockOutput,
+} from "./bedrock-output-mode.js";
 import { SHOW_PROJECT_INFO } from "./site-config.js";
 import {
   analyzeArchiveInBackground,
@@ -794,35 +799,30 @@ function setBusy(busy) {
   elements["image-translation-toggle"].disabled = busy || state.mode !== "local" || !state.translatorStatus.supported;
 }
 
-function supportsForcedBedrockOutput(project = state.project) {
-  return Boolean(
-    project &&
-    ["bedrock_addon", "bedrock_world"].includes(project.artifactType) &&
-    (project.documents || []).some((document) => document.format === "bedrock-lang"),
-  );
-}
-
-function bedrockLocalizationSummary(project = state.project) {
-  const documents = (project?.documents || []).filter(
-    (document) => document.format === "bedrock-lang",
-  );
-  const uncertain = documents.filter(
-    (document) => !document.localizationEvidence?.confirmed,
-  ).length;
-  return { total: documents.length, uncertain, confirmed: documents.length - uncertain };
-}
-
 function updateBedrockOutputMode() {
-  const supported = supportsForcedBedrockOutput();
+  const supported = supportsForcedBedrockOutput(state.project);
   elements["bedrock-output-settings"].hidden = !supported;
   if (!supported) state.bedrockTranslationMode = "localized";
+  const summary = bedrockLocalizationSummary(state.project);
+  const recommended = recommendedBedrockOutputMode(state.project);
+  const localizedOption = elements["bedrock-output-mode"].querySelector('option[value="localized"]');
+  const forcedOption = elements["bedrock-output-mode"].querySelector('option[value="forced"]');
+  if (localizedOption) {
+    localizedOption.textContent = t(
+      recommended === "localized" ? "bedrockLocalizedModeRecommended" : "bedrockLocalizedMode",
+    );
+  }
+  if (forcedOption) {
+    forcedOption.textContent = t(
+      recommended === "forced" ? "bedrockForcedModeRecommended" : "bedrockForcedMode",
+    );
+  }
   elements["bedrock-output-mode"].value = state.bedrockTranslationMode;
   elements["bedrock-output-mode-copy"].textContent = t(
     state.bedrockTranslationMode === "forced"
       ? "bedrockForcedModeCopy"
       : "bedrockLocalizedModeCopy",
   );
-  const summary = bedrockLocalizationSummary();
   const status = elements["bedrock-localization-status"];
   status.classList.toggle("is-warning", summary.uncertain > 0);
   status.classList.toggle("is-confirmed", summary.total > 0 && summary.uncertain === 0);
@@ -871,8 +871,8 @@ function openDownloadWarning(kind, summary) {
 }
 
 async function confirmBedrockDownloadMode() {
-  if (!supportsForcedBedrockOutput()) return state.bedrockTranslationMode;
-  const summary = bedrockLocalizationSummary();
+  if (!supportsForcedBedrockOutput(state.project)) return state.bedrockTranslationMode;
+  const summary = bedrockLocalizationSummary(state.project);
   const forced = state.bedrockTranslationMode === "forced";
   if (!forced && summary.uncertain === 0) return "localized";
   const decision = await openDownloadWarning(forced ? "forced" : "localized", summary);
@@ -1821,6 +1821,7 @@ async function loadFiles(fileList, { scroll = true } = {}) {
     }
     state.project = combineProjects(projects);
     state.project.warnings.push(...failures);
+    state.bedrockTranslationMode = recommendedBedrockOutputMode(state.project);
     state.imageCandidates = [];
     state.imageRegions = new Map();
     state.selectedImageId = "";

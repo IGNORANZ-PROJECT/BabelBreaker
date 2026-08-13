@@ -225,7 +225,7 @@ test("mcaddon containers rebuild their nested packs", async () => {
   const project = await analyzeArchive(file);
   assert.equal(project.artifactType, "bedrock_addon");
   assert.deepEqual(project.documents[0].localizationEvidence, {
-    confirmed: true,
+    confirmed: false,
     languageFileCount: 1,
     languagesJson: "valid",
     declaredLocales: ["en_us"],
