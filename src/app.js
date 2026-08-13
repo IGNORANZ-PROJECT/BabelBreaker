@@ -76,8 +76,12 @@ const state = {
   imageView: "after",
   imageEditing: false,
   selectedRegionIds: new Set(),
+  imageSelectionMode: false,
+  selectedImageIds: new Set(),
+  textSelectionMode: false,
   selectedEntryIds: new Set(),
   lastSelectedEntryId: "",
+  reviewTab: "text",
 };
 const CONTENT_KIND_LABELS = {
   patchouli: "Patchouli",
@@ -369,51 +373,6 @@ document.querySelector("#app").innerHTML = `
         </aside>
       </div>
 
-      <section class="image-panel panel" id="image-panel" hidden>
-        <div class="image-panel-heading">
-          <div>
-            <h3>${t("imageTranslationTitle")}</h3>
-            <p>${t("imageTranslationCopy")}</p>
-          </div>
-          <strong class="image-result-count" id="image-result-count"></strong>
-        </div>
-        <p class="image-local-note">${icon("lock", 14)} ${t("imageLocalOnly")}</p>
-        <div class="image-workspace" id="image-workspace">
-          <div class="image-results" id="image-results" aria-label="${t("imageResultsAria")}"></div>
-          <div class="image-review-bar">
-            <div class="image-view-tabs" role="group" aria-label="${t("imageViewAria")}">
-              <button type="button" data-image-view="before">${t("imageBefore")}</button>
-              <button type="button" data-image-view="after" class="selected">${t("imageAfter")}</button>
-              <button type="button" data-image-view="compare">${t("imageCompare")}</button>
-            </div>
-            <label class="image-output-toggle"><input id="image-output-toggle" type="checkbox" checked /> ${t("imageOutputInclude")}</label>
-          </div>
-          <div class="image-editor-layout">
-            <div>
-              <div class="image-preview-shell" id="image-preview-shell">
-                <img id="image-preview-before" alt="" />
-                <div class="image-after-clip" id="image-after-clip"><img id="image-preview" alt="" /></div>
-                <div class="image-region-overlay" id="image-region-overlay"></div>
-                <input class="image-compare-slider" id="image-compare-slider" type="range" min="0" max="100" value="50" aria-label="${t("imageCompareSlider")}" hidden />
-              </div>
-              <button class="secondary-button image-edit-button" id="image-edit-button" type="button">${t("imageEdit")}</button>
-            </div>
-            <div>
-              <p class="image-status" id="image-status"></p>
-              <div class="image-region-list" id="image-region-list"></div>
-              <button class="secondary-button image-apply-button" id="apply-image-button" type="button" hidden>${t("imageApplyButton")}</button>
-            </div>
-          </div>
-          <div class="image-selection-bar" id="image-selection-bar" hidden>
-            <strong id="image-selection-count"></strong>
-            <select id="image-selection-language" aria-label="${t("sourceLanguage")}">${sourceLanguageOptions}</select>
-            <button type="button" class="secondary-button compact" id="image-selection-language-button">${t("setLanguage")}</button>
-            <button type="button" class="secondary-button compact" id="image-selection-disable-button">${t("disableTranslation")}</button>
-            <button type="button" class="text-button" id="image-selection-clear-button">${t("clearSelection")}</button>
-          </div>
-        </div>
-      </section>
-
       <section class="progress-panel panel" id="progress-panel" hidden>
         <div class="progress-copy">
           <div>
@@ -465,7 +424,15 @@ document.querySelector("#app").innerHTML = `
               <p id="review-summary"></p>
             </div>
           </div>
+        </div>
+        <div class="review-content-tabs" role="tablist" aria-label="${t("reviewContentAria")}">
+          <button type="button" role="tab" data-review-tab="text" aria-selected="true">${t("reviewTextTab")} <span id="review-text-count">0</span></button>
+          <button type="button" role="tab" data-review-tab="images" aria-selected="false" id="review-image-tab" hidden>${t("reviewImageTab")} <span id="review-image-count">0</span></button>
+        </div>
+
+        <div class="review-pane" id="review-text-pane">
           <div class="review-actions">
+            <button class="secondary-button compact selection-mode-button" id="text-selection-button" type="button">${t("selectItems")}</button>
             <label class="search-box">
               <span class="sr-only">${t("searchAria")}</span>
               <input id="entry-search" type="search" placeholder="${t("searchPlaceholder")}" />
@@ -478,18 +445,68 @@ document.querySelector("#app").innerHTML = `
               <option value="all">${t("filterAll")}</option>
             </select>
           </div>
-        </div>
-        <div class="review-bulk-actions">
-          <div class="ambiguous-language-action" id="ambiguous-language-action" hidden>
-            <span id="ambiguous-language-count"></span>
-            <select id="bulk-source-language" aria-label="${t("sourceLanguage")}">${sourceLanguageOptions}</select>
-            <button class="text-button" id="apply-bulk-source-language" type="button">${t("setLanguageAndTranslate")}</button>
+          <div class="review-bulk-actions">
+            <button class="text-button" id="ignore-ambiguous-button" type="button">${t("ignoreAmbiguous")}</button>
+            <button class="text-button" id="ignore-visible-button" type="button">${t("ignoreVisible")}</button>
           </div>
-          <button class="text-button" id="ignore-ambiguous-button" type="button">${t("ignoreAmbiguous")}</button>
-          <button class="text-button" id="ignore-visible-button" type="button">${t("ignoreVisible")}</button>
+          <div class="entry-list" id="entry-list"></div>
+          <button class="quiet-button load-more" id="load-more-button" type="button" hidden>${t("loadMore")}</button>
+          <div class="selection-action-bar ambiguous-language-action" id="ambiguous-language-action" hidden>
+            <strong id="ambiguous-language-count"></strong>
+            <label><span>${t("detectedLanguage")}</span><select id="bulk-source-language" aria-label="${t("detectedLanguage")}">${sourceLanguageOptions}</select></label>
+            <label class="selection-toggle"><input id="bulk-translation-toggle" type="checkbox" checked /> ${t("translationEnabled")}</label>
+            <button class="secondary-button compact" id="apply-bulk-source-language" type="button">${t("applySelection")}</button>
+            <button class="text-button" id="clear-text-selection" type="button">${t("clearSelection")}</button>
+          </div>
         </div>
-        <div class="entry-list" id="entry-list"></div>
-        <button class="quiet-button load-more" id="load-more-button" type="button" hidden>${t("loadMore")}</button>
+
+        <section class="image-panel review-pane" id="image-panel" hidden>
+          <div class="image-panel-heading">
+            <div>
+              <h4>${t("imageTranslationTitle")}</h4>
+              <p>${t("imageTranslationCopy")}</p>
+            </div>
+            <div class="image-heading-actions">
+              <strong class="image-result-count" id="image-result-count"></strong>
+              <button class="secondary-button compact selection-mode-button" id="image-select-button" type="button">${t("selectImages")}</button>
+            </div>
+          </div>
+          <p class="image-local-note">${icon("lock", 14)} ${t("imageLocalOnly")}</p>
+          <div class="image-workspace" id="image-workspace">
+            <div class="image-results" id="image-results" aria-label="${t("imageResultsAria")}"></div>
+            <div class="image-review-bar">
+              <div class="image-view-tabs" role="group" aria-label="${t("imageViewAria")}">
+                <button type="button" data-image-view="before">${t("imageBefore")}</button>
+                <button type="button" data-image-view="after" class="selected">${t("imageAfter")}</button>
+                <button type="button" data-image-view="compare">${t("imageCompare")}</button>
+              </div>
+            </div>
+            <div class="image-editor-layout">
+              <div>
+                <div class="image-preview-shell" id="image-preview-shell">
+                  <img id="image-preview-before" alt="" />
+                  <div class="image-after-clip" id="image-after-clip"><img id="image-preview" alt="" /></div>
+                  <div class="image-region-overlay" id="image-region-overlay"></div>
+                  <input class="image-compare-slider" id="image-compare-slider" type="range" min="0" max="100" value="50" aria-label="${t("imageCompareSlider")}" hidden />
+                </div>
+                <button class="secondary-button image-edit-button" id="image-edit-button" type="button">${t("imageEdit")}</button>
+              </div>
+              <div>
+                <p class="image-status" id="image-status"></p>
+                <div class="image-region-list" id="image-region-list"></div>
+                <button class="secondary-button image-apply-button" id="apply-image-button" type="button" hidden>${t("imageApplyButton")}</button>
+              </div>
+            </div>
+            <div class="selection-action-bar image-selection-bar" id="image-selection-bar" hidden>
+              <strong id="image-selection-count"></strong>
+              <label><span>${t("detectedLanguage")}</span><select id="image-selection-language" aria-label="${t("detectedLanguage")}">${sourceLanguageOptions}</select></label>
+              <label class="selection-toggle"><input id="image-selection-translation-toggle" type="checkbox" checked /> ${t("translationEnabled")}</label>
+              <button type="button" class="secondary-button compact" id="image-selection-language-button">${t("applySelection")}</button>
+              <button type="button" class="text-button" id="image-selection-clear-button">${t("clearSelection")}</button>
+            </div>
+          </div>
+        </section>
+
         <div class="download-row">
           <div class="download-summary">
             <strong id="ready-title">${t("readyTitle")}</strong>
@@ -646,13 +663,20 @@ const elements = Object.fromEntries(
     "apply-translation-button",
     "review-panel",
     "review-summary",
+    "review-text-pane",
+    "review-text-count",
+    "review-image-tab",
+    "review-image-count",
+    "text-selection-button",
     "entry-search",
     "entry-filter",
     "ignore-ambiguous-button",
     "ambiguous-language-action",
     "ambiguous-language-count",
     "bulk-source-language",
+    "bulk-translation-toggle",
     "apply-bulk-source-language",
+    "clear-text-selection",
     "ignore-visible-button",
     "entry-list",
     "load-more-button",
@@ -668,6 +692,7 @@ const elements = Object.fromEntries(
     "image-panel",
     "image-workspace",
     "image-result-count",
+    "image-select-button",
     "image-results",
     "image-preview",
     "image-preview-before",
@@ -675,13 +700,12 @@ const elements = Object.fromEntries(
     "image-after-clip",
     "image-region-overlay",
     "image-compare-slider",
-    "image-output-toggle",
     "image-edit-button",
     "image-selection-bar",
     "image-selection-count",
     "image-selection-language",
+    "image-selection-translation-toggle",
     "image-selection-language-button",
-    "image-selection-disable-button",
     "image-selection-clear-button",
     "image-status",
     "image-region-list",
@@ -1267,16 +1291,14 @@ function updateReviewChrome(stats = getProjectStats(state.project)) {
     ignored: stats.ignored.toLocaleString(numberLocale),
   })}`;
   elements["ignore-ambiguous-button"].disabled = stats.ambiguous === 0;
-  const ambiguousEntries = state.project.entries.filter((entry) => languageNeedsReview(entry));
-  elements["ambiguous-language-action"].hidden = ambiguousEntries.length === 0;
   const selectedCount = state.selectedEntryIds.size;
-  elements["ambiguous-language-action"].classList.toggle("selection-active", selectedCount > 0);
-  elements["ambiguous-language-count"].textContent = t(
-    selectedCount ? "selectedTextCount" : "ambiguousTextCount",
-    {
-      count: (selectedCount || ambiguousEntries.length).toLocaleString(numberLocale),
-    },
-  );
+  elements["ambiguous-language-action"].hidden = selectedCount === 0;
+  elements["ambiguous-language-count"].textContent = t("selectedTextCount", {
+    count: selectedCount.toLocaleString(numberLocale),
+  });
+  elements["review-text-count"].textContent = stats.needsReview.toLocaleString(numberLocale);
+  elements["review-image-count"].textContent = state.imageCandidates.length.toLocaleString(numberLocale);
+  elements["review-image-tab"].hidden = state.imageCandidates.length === 0;
 }
 
 function renderEntries() {
@@ -1290,12 +1312,13 @@ function renderEntries() {
           (entry) => {
             const workflowState = getEntryWorkflowState(entry);
             const locked = ["ignored", "excluded"].includes(workflowState);
+            const selectable = workflowState !== "excluded";
             const keyLabel = entryKeyLabel(entry);
-            const canSetLanguage = languageNeedsReview(entry);
             return `
-            <article class="entry-row ${entry.warning || languageNeedsReview(entry) ? "has-warning" : ""} ${workflowState === "ignored" ? "is-ignored" : ""}" data-entry-id="${entry.id}">
+            <article class="entry-row ${entry.warning || languageNeedsReview(entry) ? "has-warning" : ""} ${workflowState === "ignored" ? "is-ignored" : ""} ${state.selectedEntryIds.has(entry.id) ? "is-selected" : ""}" data-entry-id="${entry.id}">
               <div class="entry-key">
                 <div class="entry-meta">
+                  ${state.textSelectionMode && selectable ? `<label class="entry-language-select"><input type="checkbox" data-language-entry-id="${entry.id}" ${state.selectedEntryIds.has(entry.id) ? "checked" : ""} /> ${t("selectForLanguage")}</label>` : ""}
                   <span>${escapeHtml(entry.modName ? `${entry.modName} · ${entry.namespace}` : entry.namespace)}</span>
                   <span class="status-pill status-${workflowState}">${escapeHtml(workflowStateLabel(entry))}</span>
                 </div>
@@ -1305,7 +1328,6 @@ function renderEntries() {
               <div class="entry-source">
                 <div class="entry-source-heading">
                   <small>${t("source")} · ${escapeHtml(sourceLanguageLabel(entry))}</small>
-                  ${canSetLanguage ? `<label class="entry-language-select"><input type="checkbox" data-language-entry-id="${entry.id}" ${state.selectedEntryIds.has(entry.id) ? "checked" : ""} /> ${t("selectForLanguage")}</label>` : ""}
                 </div>
                 <p>${escapeHtml(entry.source)}</p>
                 ${sourceLanguageWarning(entry) ? `<span class="entry-warning language-warning">${icon("warning", 14)} ${escapeHtml(sourceLanguageWarning(entry))}</span>` : ""}
@@ -1334,8 +1356,19 @@ function showReview() {
   state.visibleEntries = 100;
   updateProjectSummary();
   renderEntries();
-  (state.imageCandidates.length ? elements["image-panel"] : elements["review-panel"])
-    .scrollIntoView({ behavior: "smooth", block: "start" });
+  renderReviewTab();
+  elements["review-panel"].scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderReviewTab() {
+  if (state.reviewTab === "images" && !state.imageCandidates.length) state.reviewTab = "text";
+  elements["review-text-pane"].hidden = state.reviewTab !== "text";
+  elements["image-panel"].hidden = state.reviewTab !== "images" || !state.imageCandidates.length;
+  document.querySelectorAll("[data-review-tab]").forEach((button) => {
+    const selected = button.dataset.reviewTab === state.reviewTab;
+    button.setAttribute("aria-selected", String(selected));
+    button.classList.toggle("selected", selected);
+  });
 }
 
 function selectedImageCandidate() {
@@ -1347,15 +1380,14 @@ async function showSelectedImage() {
   if (!candidate) return;
   const { candidatePreviewUrl } = await import("./image-editor.js");
   candidate.originalPreviewUrl ||= await candidatePreviewUrl({ ...candidate, previewUrl: "" });
+  const translatedPreviewUrl = await candidatePreviewUrl(candidate);
   elements["image-preview-before"].src = candidate.originalPreviewUrl;
-  elements["image-preview"].src = await candidatePreviewUrl(candidate);
+  elements["image-preview"].src = candidate.excluded ? candidate.originalPreviewUrl : translatedPreviewUrl;
   elements["image-preview"].alt = candidate.name;
   elements["image-preview-before"].alt = candidate.name;
   elements["image-preview-shell"].style.aspectRatio = `${candidate.width} / ${candidate.height}`;
-  elements["image-output-toggle"].checked = !candidate.excluded;
   elements["image-results"].querySelectorAll("[data-image-id]").forEach((button) => {
-    button.classList.toggle("selected", button.dataset.imageId === candidate.id);
-    button.setAttribute("aria-pressed", String(button.dataset.imageId === candidate.id));
+    button.classList.toggle("current", button.dataset.imageId === candidate.id);
   });
   updateImageView();
   renderImageOverlay();
@@ -1392,9 +1424,9 @@ function renderImageOverlay() {
 }
 
 function updateImageSelectionBar() {
-  const count = state.selectedRegionIds.size;
-  elements["image-selection-bar"].hidden = !state.imageEditing || count === 0;
-  elements["image-selection-count"].textContent = t("selectedAreas", { count });
+  const count = state.selectedImageIds.size;
+  elements["image-selection-bar"].hidden = !state.imageSelectionMode || count === 0;
+  elements["image-selection-count"].textContent = t("selectedImages", { count });
 }
 
 function renderImageRegions() {
@@ -1405,7 +1437,7 @@ function renderImageRegions() {
   elements["image-region-list"].innerHTML = visible.map((region) => `
     <article class="image-region-row" data-image-region="${escapeHtml(region.id)}">
       <div class="image-region-heading">
-        <label><input type="checkbox" data-region-field="enabled" ${region.enabled ? "checked" : ""} /> ${t("imageInclude")}</label>
+        <span>${t("imageOriginal")}</span>
         <span>${Math.round(region.confidence)}%</span>
       </div>
       <label>${t("imageOriginal")}
@@ -1414,13 +1446,6 @@ function renderImageRegions() {
       <label>${t("imageTranslation")}
         <textarea rows="2" data-region-field="translation">${escapeHtml(region.translation)}</textarea>
       </label>
-      <details class="image-region-adjust">
-        <summary>${t("imageAdjust")}</summary>
-        <div class="image-region-geometry">
-          ${["x", "y", "width", "height"].map((field) => `<label>${field}<input type="number" inputmode="numeric" min="0" step="1" data-region-field="${field}" value="${Number(region[field])}" /></label>`).join("")}
-          <label>${t("imageAngle")}<input type="number" inputmode="decimal" min="-45" max="45" step="0.5" data-region-field="angle" value="${Number(region.angle || 0)}" /></label>
-        </div>
-      </details>
     </article>
   `).join("");
   elements["apply-image-button"].hidden = !state.imageEditing || !visible.length;
@@ -1432,17 +1457,18 @@ async function renderImageResultTabs() {
   for (const candidate of state.imageCandidates) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "image-result-card";
+    button.className = `image-result-card ${candidate.id === state.selectedImageId ? "current" : ""} ${state.selectedImageIds.has(candidate.id) ? "selected" : ""}`;
     button.dataset.imageId = candidate.id;
-    button.setAttribute("aria-pressed", "false");
+    button.setAttribute("aria-pressed", String(state.selectedImageIds.has(candidate.id)));
     const preview = await candidatePreviewUrl(candidate);
-    button.innerHTML = `<img src="${preview}" alt="" /><span><strong>${escapeHtml(candidate.name)}</strong><small>${candidate.excluded ? t("imageExcluded") : t("imageTextAreas", { count: (state.imageRegions.get(candidate.id) || []).length })}</small></span>`;
+    button.innerHTML = `${state.imageSelectionMode ? `<span class="image-card-check" aria-hidden="true">${state.selectedImageIds.has(candidate.id) ? icon("check", 12) : ""}</span>` : ""}<img src="${preview}" alt="" /><span><strong>${escapeHtml(candidate.name)}</strong><small>${candidate.excluded ? t("imageExcluded") : t("imageTextAreas", { count: (state.imageRegions.get(candidate.id) || []).length })}</small></span>`;
     elements["image-results"].append(button);
   }
   elements["image-result-count"].textContent = t("imageOutputCount", {
     included: state.imageCandidates.filter((candidate) => !candidate.excluded).length,
     total: state.imageCandidates.length,
   });
+  updateImageSelectionBar();
 }
 
 function imageTemporaryProject(detected) {
@@ -1468,18 +1494,24 @@ function imageTemporaryProject(detected) {
 async function setSelectedEntryLanguage() {
   if (!state.project) return;
   const selected = state.project.entries.filter((entry) => state.selectedEntryIds.has(entry.id));
-  if (!selected.length) {
-    for (const entry of state.project.entries) {
-      if (languageNeedsReview(entry)) selected.push(entry);
-    }
-  }
   if (!selected.length) return;
   const sourceLanguage = elements["bulk-source-language"].value;
+  const translationEnabled = elements["bulk-translation-toggle"].checked;
+  if (!translationEnabled) {
+    for (const entry of selected) entry.ignored = true;
+    state.selectedEntryIds.clear();
+    state.textSelectionMode = false;
+    elements["text-selection-button"].textContent = t("selectItems");
+    renderEntries();
+    updateProjectSummary();
+    return;
+  }
   const temporaryProject = {
     targetLanguage: state.targetLanguage,
     namespaces: [],
     entries: selected.map((entry) => ({
       ...entry,
+      ignored: false,
       sourceLanguage,
       declaredSourceLanguage: sourceLanguage,
       detectedSourceLanguage: null,
@@ -1498,6 +1530,8 @@ async function setSelectedEntryLanguage() {
     const translated = new Map(temporaryProject.entries.map((entry) => [entry.id, entry]));
     for (const entry of selected) Object.assign(entry, translated.get(entry.id));
     state.selectedEntryIds.clear();
+    state.textSelectionMode = false;
+    elements["text-selection-button"].textContent = t("selectItems");
     renderEntries();
     showNotice(t("translationComplete"), "success");
   } catch (error) {
@@ -1638,32 +1672,45 @@ function setCandidateOutput(candidate, included) {
   }
 }
 
-async function setSelectedImageRegionLanguage() {
-  const regions = (state.imageRegions.get(state.selectedImageId) || [])
-    .filter((region) => state.selectedRegionIds.has(region.id));
-  if (!regions.length) return;
+async function applySelectedImageSettings() {
+  const candidates = state.imageCandidates.filter((candidate) => state.selectedImageIds.has(candidate.id));
+  if (!candidates.length) return;
   const sourceLanguage = elements["image-selection-language"].value;
-  const candidate = selectedImageCandidate();
-  if (!candidate) return;
+  const translationEnabled = elements["image-selection-translation-toggle"].checked;
+  if (!translationEnabled) {
+    for (const candidate of candidates) setCandidateOutput(candidate, false);
+    state.selectedImageIds.clear();
+    state.imageSelectionMode = false;
+    elements["image-select-button"].textContent = t("selectImages");
+    await renderImageResultTabs();
+    await showSelectedImage();
+    updateReviewChrome();
+    return;
+  }
   setBusy(true);
   try {
-    const { createImageRecognizer, cropImageCandidate, ocrLanguageFor } = await import("./image-editor.js");
+    const { candidatePreviewUrl, createImageRecognizer, cropImageCandidate, ocrLanguageFor, renderTranslatedImage } = await import("./image-editor.js");
     const recognizer = await createImageRecognizer({ languages: [ocrLanguageFor(sourceLanguage)] });
     try {
-      for (const region of regions) {
-        const crop = await cropImageCandidate(candidate, region);
-        const recognized = await recognizer.recognize(crop);
-        const text = recognized.map((item) => item.text).join(" ").trim();
-        if (text) region.text = text;
+      for (const candidate of candidates) {
+        for (const region of state.imageRegions.get(candidate.id) || []) {
+          const crop = await cropImageCandidate(candidate, region);
+          const recognized = await recognizer.recognize(crop);
+          const text = recognized.map((item) => item.text).join(" ").trim();
+          if (text) region.text = text;
+        }
       }
     } finally {
       await recognizer.terminate();
     }
+    const selectedRegions = candidates.flatMap((candidate) =>
+      (state.imageRegions.get(candidate.id) || []).map((region) => ({ candidate, region })),
+    );
     const temporaryProject = {
       targetLanguage: state.targetLanguage,
       namespaces: [],
-      entries: regions.map((region) => ({
-        id: region.id,
+      entries: selectedRegions.map(({ candidate, region }) => ({
+        id: `${candidate.id}::${region.id}`,
         key: region.id,
         source: region.text,
         sourceLanguage,
@@ -1678,12 +1725,23 @@ async function setSelectedImageRegionLanguage() {
     };
     await translateProject(temporaryProject, { glossaryText: elements.glossary.value });
     const translated = new Map(temporaryProject.entries.map((entry) => [entry.id, entry.translation]));
-    for (const region of regions) {
+    for (const { candidate, region } of selectedRegions) {
       region.sourceLanguage = sourceLanguage;
-      region.translation = translated.get(region.id) || region.translation;
+      region.translation = translated.get(`${candidate.id}::${region.id}`) || region.translation;
       region.confidence = Math.max(70, region.confidence);
+      region.enabled = true;
     }
-    await applySelectedImage();
+    for (const candidate of candidates) {
+      const bytes = await renderTranslatedImage(candidate, state.imageRegions.get(candidate.id) || []);
+      candidate.renderedBytes = bytes;
+      candidate.previewUrl = await candidatePreviewUrl({ ...candidate, bytes, previewUrl: "" });
+      setCandidateOutput(candidate, true);
+    }
+    state.selectedImageIds.clear();
+    state.imageSelectionMode = false;
+    elements["image-select-button"].textContent = t("selectImages");
+    await renderImageResultTabs();
+    await showSelectedImage();
     renderImageOverlay();
     renderImageRegions();
   } catch (error) {
@@ -1715,7 +1773,11 @@ async function loadFiles(fileList, { scroll = true } = {}) {
   state.imageEditing = false;
   state.imageView = "after";
   state.selectedRegionIds.clear();
+  state.imageSelectionMode = false;
+  state.selectedImageIds.clear();
+  state.textSelectionMode = false;
   state.selectedEntryIds.clear();
+  state.reviewTab = "text";
   clearNotice();
   elements["drop-zone"].classList.add("loading");
   elements["drop-zone"].querySelector("strong").textContent = t("analyzing");
@@ -1976,7 +2038,11 @@ function resetWorkspace() {
   state.imageEditing = false;
   state.imageView = "after";
   state.selectedRegionIds.clear();
+  state.imageSelectionMode = false;
+  state.selectedImageIds.clear();
+  state.textSelectionMode = false;
   state.selectedEntryIds.clear();
+  state.reviewTab = "text";
   elements.workspace.hidden = true;
   elements["ui-language"].disabled = false;
   elements["ui-language"].removeAttribute("title");
@@ -2029,9 +2095,47 @@ elements["image-translation-toggle"].addEventListener("change", (event) => {
   state.translateImages = event.target.checked;
   updateStartLabel();
 });
+document.querySelectorAll("[data-review-tab]").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.reviewTab = button.dataset.reviewTab;
+    renderReviewTab();
+  });
+});
+elements["text-selection-button"].addEventListener("click", () => {
+  state.textSelectionMode = !state.textSelectionMode;
+  state.selectedEntryIds.clear();
+  elements["bulk-translation-toggle"].checked = true;
+  elements["text-selection-button"].textContent = t(state.textSelectionMode ? "finishSelection" : "selectItems");
+  renderEntries();
+});
+elements["clear-text-selection"].addEventListener("click", () => {
+  state.selectedEntryIds.clear();
+  state.textSelectionMode = false;
+  elements["text-selection-button"].textContent = t("selectItems");
+  renderEntries();
+});
+elements["image-select-button"].addEventListener("click", async () => {
+  state.imageSelectionMode = !state.imageSelectionMode;
+  state.selectedImageIds.clear();
+  elements["image-selection-translation-toggle"].checked = true;
+  state.imageEditing = false;
+  state.selectedRegionIds.clear();
+  elements["image-edit-button"].textContent = t("imageEdit");
+  elements["image-select-button"].textContent = t(state.imageSelectionMode ? "finishSelection" : "selectImages");
+  await renderImageResultTabs();
+  renderImageOverlay();
+  renderImageRegions();
+});
 elements["image-results"].addEventListener("click", async (event) => {
   const button = event.target.closest("[data-image-id]");
   if (!button) return;
+  if (state.imageSelectionMode) {
+    const id = button.dataset.imageId;
+    if (state.selectedImageIds.has(id)) state.selectedImageIds.delete(id);
+    else state.selectedImageIds.add(id);
+    await renderImageResultTabs();
+    return;
+  }
   state.selectedImageId = button.dataset.imageId;
   state.selectedRegionIds.clear();
   await showSelectedImage();
@@ -2043,14 +2147,8 @@ document.querySelectorAll("[data-image-view]").forEach((button) => {
   });
 });
 elements["image-compare-slider"].addEventListener("input", updateImageView);
-elements["image-output-toggle"].addEventListener("change", async (event) => {
-  const candidate = selectedImageCandidate();
-  if (!candidate) return;
-  setCandidateOutput(candidate, event.target.checked);
-  await renderImageResultTabs();
-  await showSelectedImage();
-});
 elements["image-edit-button"].addEventListener("click", () => {
+  if (state.imageSelectionMode) return;
   state.imageEditing = !state.imageEditing;
   state.selectedRegionIds.clear();
   elements["image-edit-button"].textContent = t(state.imageEditing ? "imageEditDone" : "imageEdit");
@@ -2058,21 +2156,12 @@ elements["image-edit-button"].addEventListener("click", () => {
   renderImageRegions();
 });
 elements["image-selection-clear-button"].addEventListener("click", () => {
-  state.selectedRegionIds.clear();
-  renderImageOverlay();
-  renderImageRegions();
+  state.selectedImageIds.clear();
+  state.imageSelectionMode = false;
+  elements["image-select-button"].textContent = t("selectImages");
+  renderImageResultTabs();
 });
-elements["image-selection-disable-button"].addEventListener("click", async () => {
-  const regions = state.imageRegions.get(state.selectedImageId) || [];
-  for (const region of regions) {
-    if (state.selectedRegionIds.has(region.id)) region.enabled = false;
-  }
-  await applySelectedImage();
-  state.selectedRegionIds.clear();
-  renderImageOverlay();
-  renderImageRegions();
-});
-elements["image-selection-language-button"].addEventListener("click", setSelectedImageRegionLanguage);
+elements["image-selection-language-button"].addEventListener("click", applySelectedImageSettings);
 elements["apply-image-button"].addEventListener("click", applySelectedImage);
 elements["image-region-list"].addEventListener("input", (event) => {
   const field = event.target.dataset.regionField;
@@ -2090,13 +2179,8 @@ elements["image-region-overlay"].addEventListener("click", (event) => {
   const box = event.target.closest("[data-overlay-region]");
   if (!box || event.target.closest("[data-overlay-handle]")) return;
   const id = box.dataset.overlayRegion;
-  if (event.shiftKey || event.metaKey) {
-    if (state.selectedRegionIds.has(id)) state.selectedRegionIds.delete(id);
-    else state.selectedRegionIds.add(id);
-  } else {
-    state.selectedRegionIds.clear();
-    state.selectedRegionIds.add(id);
-  }
+  state.selectedRegionIds.clear();
+  state.selectedRegionIds.add(id);
   renderImageOverlay();
   renderImageRegions();
 });
@@ -2115,12 +2199,7 @@ elements["image-region-overlay"].addEventListener("pointerdown", (event) => {
   const startX = event.clientX;
   const startY = event.clientY;
   const original = region ? { ...region } : null;
-  let selection = null;
-  if (!region) {
-    selection = document.createElement("div");
-    selection.className = "image-range-selection";
-    overlay.append(selection);
-  }
+  if (!region) return;
   event.preventDefault();
   overlay.setPointerCapture(event.pointerId);
   const move = (moveEvent) => {
@@ -2139,30 +2218,12 @@ elements["image-region-overlay"].addEventListener("pointerdown", (event) => {
         region.y = Math.max(0, Math.min(candidate.height - original.height, original.y + dy * candidate.height / rect.height));
       }
       renderImageOverlay();
-    } else if (selection) {
-      const left = Math.min(startX, moveEvent.clientX) - rect.left;
-      const top = Math.min(startY, moveEvent.clientY) - rect.top;
-      selection.style.cssText = `left:${left}px;top:${top}px;width:${Math.abs(dx)}px;height:${Math.abs(dy)}px`;
     }
   };
   const up = async (upEvent) => {
     overlay.removeEventListener("pointermove", move);
     overlay.removeEventListener("pointerup", up);
-    if (selection) {
-      const x0 = Math.min(startX, upEvent.clientX) - rect.left;
-      const y0 = Math.min(startY, upEvent.clientY) - rect.top;
-      const x1 = Math.max(startX, upEvent.clientX) - rect.left;
-      const y1 = Math.max(startY, upEvent.clientY) - rect.top;
-      state.selectedRegionIds.clear();
-      for (const item of state.imageRegions.get(state.selectedImageId) || []) {
-        const left = item.x / candidate.width * rect.width;
-        const top = item.y / candidate.height * rect.height;
-        const right = left + item.width / candidate.width * rect.width;
-        const bottom = top + item.height / candidate.height * rect.height;
-        if (right >= x0 && left <= x1 && bottom >= y0 && top <= y1) state.selectedRegionIds.add(item.id);
-      }
-      selection.remove();
-    } else if (region) {
+    if (region) {
       state.selectedRegionIds.clear();
       state.selectedRegionIds.add(region.id);
       await applySelectedImage();
@@ -2286,7 +2347,7 @@ elements["entry-list"].addEventListener("click", (event) => {
   const languageCheckbox = event.target.closest("[data-language-entry-id]");
   if (languageCheckbox) {
     const id = languageCheckbox.dataset.languageEntryId;
-    const selectable = filteredEntries().filter((entry) => languageNeedsReview(entry));
+    const selectable = filteredEntries().filter((entry) => getEntryWorkflowState(entry) !== "excluded");
     if (event.shiftKey && state.lastSelectedEntryId) {
       const start = selectable.findIndex((entry) => entry.id === state.lastSelectedEntryId);
       const end = selectable.findIndex((entry) => entry.id === id);
