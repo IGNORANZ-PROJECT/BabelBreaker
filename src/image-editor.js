@@ -13,6 +13,10 @@ export function ocrLanguagesForProject(project) {
   return source.length ? source : ["eng"];
 }
 
+export function ocrLanguageFor(sourceLanguage) {
+  return OCR_LANGUAGE[sourceLanguage] || "eng";
+}
+
 function decodeTga(bytes) {
   if (bytes.length < 18) throw new Error("TGA header is incomplete.");
   const idLength = bytes[0];
@@ -93,10 +97,66 @@ async function canvasFromCandidate(candidate) {
   }
 }
 
+function prepareCanvasForOcr(source) {
+  const scale = Math.max(1, Math.min(3, 1800 / Math.max(source.width, source.height)));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(source.width * scale);
+  canvas.height = Math.round(source.height * scale);
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  const image = context.getImageData(0, 0, canvas.width, canvas.height);
+  for (let offset = 0; offset < image.data.length; offset += 4) {
+    const alpha = image.data[offset + 3] / 255;
+    for (let channel = 0; channel < 3; channel += 1) {
+      const flattened = image.data[offset + channel] * alpha + 255 * (1 - alpha);
+      image.data[offset + channel] = Math.max(0, Math.min(255, (flattened - 128) * 1.28 + 128));
+    }
+    image.data[offset + 3] = 255;
+  }
+  context.putImageData(image, 0, 0);
+  return { canvas, scale };
+}
+
+function looksLikeUsefulText(text) {
+  if (!text || text.includes("\uFFFD")) return false;
+  const visible = [...text].filter((character) => !/\s/u.test(character));
+  const useful = visible.filter((character) => /[\p{L}\p{N}]/u.test(character));
+  return useful.length >= 2 && useful.length / Math.max(visible.length, 1) >= 0.45;
+}
+
 export async function candidatePreviewUrl(candidate) {
   if (candidate.previewUrl) return candidate.previewUrl;
   const canvas = await canvasFromCandidate(candidate);
   return canvas.toDataURL("image/png");
+}
+
+export async function cropImageCandidate(candidate, area) {
+  const source = await canvasFromCandidate(candidate);
+  const x = Math.max(0, Math.floor(Number(area.x) || 0));
+  const y = Math.max(0, Math.floor(Number(area.y) || 0));
+  const width = Math.max(1, Math.min(source.width - x, Math.ceil(Number(area.width) || 1)));
+  const height = Math.max(1, Math.min(source.height - y, Math.ceil(Number(area.height) || 1)));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  canvas.getContext("2d").drawImage(source, x, y, width, height, 0, 0, width, height);
+  const blob = await new Promise((resolve, reject) => canvas.toBlob(
+    (result) => result ? resolve(result) : reject(new Error("The selected image area could not be encoded.")),
+    "image/png",
+  ));
+  return {
+    ...candidate,
+    id: `${candidate.id}:crop:${x}:${y}:${width}:${height}`,
+    mime: "image/png",
+    width,
+    height,
+    bytes: new Uint8Array(await blob.arrayBuffer()),
+    previewUrl: "",
+  };
 }
 
 export async function createImageRecognizer({
@@ -116,7 +176,8 @@ export async function createImageRecognizer({
   });
   return {
     async recognize(candidate) {
-      const canvas = await canvasFromCandidate(candidate);
+      const sourceCanvas = await canvasFromCandidate(candidate);
+      const { canvas, scale } = prepareCanvasForOcr(sourceCanvas);
     const result = await worker.recognize(canvas, { rotateAuto: true }, { text: true, blocks: true });
     const lines = (result.data.blocks || [])
       .flatMap((block) => block.paragraphs || [])
@@ -133,15 +194,15 @@ export async function createImageRecognizer({
           text,
           translation: "",
           confidence: Math.round(line.confidence || 0),
-          x: Math.max(0, Math.round(bbox.x0 || 0)),
-          y: Math.max(0, Math.round(bbox.y0 || 0)),
-          width: Math.max(1, Math.round((bbox.x1 || 0) - (bbox.x0 || 0))),
-          height: Math.max(1, Math.round((bbox.y1 || 0) - (bbox.y0 || 0))),
+          x: Math.max(0, Math.round((bbox.x0 || 0) / scale)),
+          y: Math.max(0, Math.round((bbox.y0 || 0) / scale)),
+          width: Math.max(1, Math.round(((bbox.x1 || 0) - (bbox.x0 || 0)) / scale)),
+          height: Math.max(1, Math.round(((bbox.y1 || 0) - (bbox.y0 || 0)) / scale)),
           angle: Math.max(-45, Math.min(45, Math.round(angle * 10) / 10)),
-          enabled: true,
+          enabled: Number(line.confidence || 0) >= 45,
         };
       })
-        .filter((region) => region.text && /\p{L}/u.test(region.text) && region.confidence >= 25);
+        .filter((region) => looksLikeUsefulText(region.text) && region.confidence >= 30);
     },
     terminate() {
       return worker.terminate();

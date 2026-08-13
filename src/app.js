@@ -18,6 +18,7 @@ import {
   translateProject,
 } from "./core.js";
 import {
+  SOURCE_LANGUAGES,
   TARGET_LANGUAGES,
   estimateLocalModelSizeMb,
   getDefaultTargetLanguage,
@@ -72,6 +73,11 @@ const state = {
   imageRegions: new Map(),
   selectedImageId: "",
   translateImages: false,
+  imageView: "after",
+  imageEditing: false,
+  selectedRegionIds: new Set(),
+  selectedEntryIds: new Set(),
+  lastSelectedEntryId: "",
 };
 const CONTENT_KIND_LABELS = {
   patchouli: "Patchouli",
@@ -126,6 +132,10 @@ const targetLanguageOptions = TARGET_LANGUAGES.map(
 const uiLanguageOptions = UI_LOCALES.map(
   (locale) =>
     `<option value="${locale.id}" ${locale.id === uiLocale ? "selected" : ""}>${locale.label}</option>`,
+).join("");
+
+const sourceLanguageOptions = SOURCE_LANGUAGES.map((language) =>
+  `<option value="${language.id}">${language.nativeName}</option>`,
 ).join("");
 
 const headerProjectLink = SHOW_PROJECT_INFO
@@ -370,13 +380,36 @@ document.querySelector("#app").innerHTML = `
         <p class="image-local-note">${icon("lock", 14)} ${t("imageLocalOnly")}</p>
         <div class="image-workspace" id="image-workspace">
           <div class="image-results" id="image-results" aria-label="${t("imageResultsAria")}"></div>
+          <div class="image-review-bar">
+            <div class="image-view-tabs" role="group" aria-label="${t("imageViewAria")}">
+              <button type="button" data-image-view="before">${t("imageBefore")}</button>
+              <button type="button" data-image-view="after" class="selected">${t("imageAfter")}</button>
+              <button type="button" data-image-view="compare">${t("imageCompare")}</button>
+            </div>
+            <label class="image-output-toggle"><input id="image-output-toggle" type="checkbox" checked /> ${t("imageOutputInclude")}</label>
+          </div>
           <div class="image-editor-layout">
-            <div class="image-preview-shell"><img id="image-preview" alt="" /></div>
+            <div>
+              <div class="image-preview-shell" id="image-preview-shell">
+                <img id="image-preview-before" alt="" />
+                <div class="image-after-clip" id="image-after-clip"><img id="image-preview" alt="" /></div>
+                <div class="image-region-overlay" id="image-region-overlay"></div>
+                <input class="image-compare-slider" id="image-compare-slider" type="range" min="0" max="100" value="50" aria-label="${t("imageCompareSlider")}" hidden />
+              </div>
+              <button class="secondary-button image-edit-button" id="image-edit-button" type="button">${t("imageEdit")}</button>
+            </div>
             <div>
               <p class="image-status" id="image-status"></p>
               <div class="image-region-list" id="image-region-list"></div>
               <button class="secondary-button image-apply-button" id="apply-image-button" type="button" hidden>${t("imageApplyButton")}</button>
             </div>
+          </div>
+          <div class="image-selection-bar" id="image-selection-bar" hidden>
+            <strong id="image-selection-count"></strong>
+            <select id="image-selection-language" aria-label="${t("sourceLanguage")}">${sourceLanguageOptions}</select>
+            <button type="button" class="secondary-button compact" id="image-selection-language-button">${t("setLanguage")}</button>
+            <button type="button" class="secondary-button compact" id="image-selection-disable-button">${t("disableTranslation")}</button>
+            <button type="button" class="text-button" id="image-selection-clear-button">${t("clearSelection")}</button>
           </div>
         </div>
       </section>
@@ -447,6 +480,11 @@ document.querySelector("#app").innerHTML = `
           </div>
         </div>
         <div class="review-bulk-actions">
+          <div class="ambiguous-language-action" id="ambiguous-language-action" hidden>
+            <span id="ambiguous-language-count"></span>
+            <select id="bulk-source-language" aria-label="${t("sourceLanguage")}">${sourceLanguageOptions}</select>
+            <button class="text-button" id="apply-bulk-source-language" type="button">${t("setLanguageAndTranslate")}</button>
+          </div>
           <button class="text-button" id="ignore-ambiguous-button" type="button">${t("ignoreAmbiguous")}</button>
           <button class="text-button" id="ignore-visible-button" type="button">${t("ignoreVisible")}</button>
         </div>
@@ -611,6 +649,10 @@ const elements = Object.fromEntries(
     "entry-search",
     "entry-filter",
     "ignore-ambiguous-button",
+    "ambiguous-language-action",
+    "ambiguous-language-count",
+    "bulk-source-language",
+    "apply-bulk-source-language",
     "ignore-visible-button",
     "entry-list",
     "load-more-button",
@@ -628,6 +670,19 @@ const elements = Object.fromEntries(
     "image-result-count",
     "image-results",
     "image-preview",
+    "image-preview-before",
+    "image-preview-shell",
+    "image-after-clip",
+    "image-region-overlay",
+    "image-compare-slider",
+    "image-output-toggle",
+    "image-edit-button",
+    "image-selection-bar",
+    "image-selection-count",
+    "image-selection-language",
+    "image-selection-language-button",
+    "image-selection-disable-button",
+    "image-selection-clear-button",
     "image-status",
     "image-region-list",
     "apply-image-button",
@@ -1212,6 +1267,16 @@ function updateReviewChrome(stats = getProjectStats(state.project)) {
     ignored: stats.ignored.toLocaleString(numberLocale),
   })}`;
   elements["ignore-ambiguous-button"].disabled = stats.ambiguous === 0;
+  const ambiguousEntries = state.project.entries.filter((entry) => languageNeedsReview(entry));
+  elements["ambiguous-language-action"].hidden = ambiguousEntries.length === 0;
+  const selectedCount = state.selectedEntryIds.size;
+  elements["ambiguous-language-action"].classList.toggle("selection-active", selectedCount > 0);
+  elements["ambiguous-language-count"].textContent = t(
+    selectedCount ? "selectedTextCount" : "ambiguousTextCount",
+    {
+      count: (selectedCount || ambiguousEntries.length).toLocaleString(numberLocale),
+    },
+  );
 }
 
 function renderEntries() {
@@ -1226,6 +1291,7 @@ function renderEntries() {
             const workflowState = getEntryWorkflowState(entry);
             const locked = ["ignored", "excluded"].includes(workflowState);
             const keyLabel = entryKeyLabel(entry);
+            const canSetLanguage = languageNeedsReview(entry);
             return `
             <article class="entry-row ${entry.warning || languageNeedsReview(entry) ? "has-warning" : ""} ${workflowState === "ignored" ? "is-ignored" : ""}" data-entry-id="${entry.id}">
               <div class="entry-key">
@@ -1237,7 +1303,10 @@ function renderEntries() {
                 ${workflowState !== "excluded" ? `<button class="entry-ignore-button" type="button" data-ignore-id="${entry.id}">${t(workflowState === "ignored" ? "restoreEntry" : "ignoreEntry")}</button>` : ""}
               </div>
               <div class="entry-source">
-                <small>${t("source")} · ${escapeHtml(sourceLanguageLabel(entry))}</small>
+                <div class="entry-source-heading">
+                  <small>${t("source")} · ${escapeHtml(sourceLanguageLabel(entry))}</small>
+                  ${canSetLanguage ? `<label class="entry-language-select"><input type="checkbox" data-language-entry-id="${entry.id}" ${state.selectedEntryIds.has(entry.id) ? "checked" : ""} /> ${t("selectForLanguage")}</label>` : ""}
+                </div>
                 <p>${escapeHtml(entry.source)}</p>
                 ${sourceLanguageWarning(entry) ? `<span class="entry-warning language-warning">${icon("warning", 14)} ${escapeHtml(sourceLanguageWarning(entry))}</span>` : ""}
               </div>
@@ -1277,25 +1346,71 @@ async function showSelectedImage() {
   const candidate = selectedImageCandidate();
   if (!candidate) return;
   const { candidatePreviewUrl } = await import("./image-editor.js");
+  candidate.originalPreviewUrl ||= await candidatePreviewUrl({ ...candidate, previewUrl: "" });
+  elements["image-preview-before"].src = candidate.originalPreviewUrl;
   elements["image-preview"].src = await candidatePreviewUrl(candidate);
   elements["image-preview"].alt = candidate.name;
+  elements["image-preview-before"].alt = candidate.name;
+  elements["image-preview-shell"].style.aspectRatio = `${candidate.width} / ${candidate.height}`;
+  elements["image-output-toggle"].checked = !candidate.excluded;
   elements["image-results"].querySelectorAll("[data-image-id]").forEach((button) => {
     button.classList.toggle("selected", button.dataset.imageId === candidate.id);
     button.setAttribute("aria-pressed", String(button.dataset.imageId === candidate.id));
   });
+  updateImageView();
+  renderImageOverlay();
   renderImageRegions();
+}
+
+function updateImageView() {
+  const compare = state.imageView === "compare";
+  const amount = state.imageView === "before"
+    ? 0
+    : state.imageView === "after"
+      ? 100
+      : Number(elements["image-compare-slider"].value);
+  elements["image-after-clip"].style.setProperty("--image-reveal", `${amount}%`);
+  elements["image-compare-slider"].hidden = !compare;
+  document.querySelectorAll("[data-image-view]").forEach((button) => {
+    button.classList.toggle("selected", button.dataset.imageView === state.imageView);
+  });
+}
+
+function renderImageOverlay() {
+  const candidate = selectedImageCandidate();
+  const regions = state.imageRegions.get(state.selectedImageId) || [];
+  elements["image-region-overlay"].hidden = !state.imageEditing;
+  elements["image-region-overlay"].innerHTML = candidate ? regions.map((region) => {
+    const selected = state.selectedRegionIds.has(region.id);
+    return `<button type="button" class="image-region-box ${selected ? "selected" : ""} ${region.enabled ? "" : "disabled"} ${region.confidence < 45 ? "uncertain" : ""}" data-overlay-region="${escapeHtml(region.id)}" style="left:${region.x / candidate.width * 100}%;top:${region.y / candidate.height * 100}%;width:${region.width / candidate.width * 100}%;height:${region.height / candidate.height * 100}%;transform:rotate(${Number(region.angle || 0)}deg)" aria-pressed="${selected}">
+      ${region.confidence < 45 ? `<span class="image-region-question">?</span>` : ""}
+      <span class="image-region-resize" data-overlay-handle="resize"></span>
+      <span class="image-region-rotate" data-overlay-handle="rotate"></span>
+    </button>`;
+  }).join("") : "";
+  updateImageSelectionBar();
+}
+
+function updateImageSelectionBar() {
+  const count = state.selectedRegionIds.size;
+  elements["image-selection-bar"].hidden = !state.imageEditing || count === 0;
+  elements["image-selection-count"].textContent = t("selectedAreas", { count });
 }
 
 function renderImageRegions() {
   const regions = state.imageRegions.get(state.selectedImageId) || [];
-  elements["image-region-list"].innerHTML = regions.map((region, index) => `
+  const visible = state.imageEditing
+    ? regions.filter((region) => state.selectedRegionIds.has(region.id))
+    : [];
+  elements["image-region-list"].innerHTML = visible.map((region) => `
     <article class="image-region-row" data-image-region="${escapeHtml(region.id)}">
       <div class="image-region-heading">
         <label><input type="checkbox" data-region-field="enabled" ${region.enabled ? "checked" : ""} /> ${t("imageInclude")}</label>
         <span>${Math.round(region.confidence)}%</span>
       </div>
-      <small>${t("imageOriginal")}</small>
-      <p>${escapeHtml(region.text)}</p>
+      <label>${t("imageOriginal")}
+        <textarea rows="2" data-region-field="text">${escapeHtml(region.text)}</textarea>
+      </label>
       <label>${t("imageTranslation")}
         <textarea rows="2" data-region-field="translation">${escapeHtml(region.translation)}</textarea>
       </label>
@@ -1308,7 +1423,7 @@ function renderImageRegions() {
       </details>
     </article>
   `).join("");
-  elements["apply-image-button"].hidden = !regions.length;
+  elements["apply-image-button"].hidden = !state.imageEditing || !visible.length;
 }
 
 async function renderImageResultTabs() {
@@ -1321,9 +1436,13 @@ async function renderImageResultTabs() {
     button.dataset.imageId = candidate.id;
     button.setAttribute("aria-pressed", "false");
     const preview = await candidatePreviewUrl(candidate);
-    button.innerHTML = `<img src="${preview}" alt="" /><span><strong>${escapeHtml(candidate.name)}</strong><small>${t("imageTextAreas", { count: (state.imageRegions.get(candidate.id) || []).length })}</small></span>`;
+    button.innerHTML = `<img src="${preview}" alt="" /><span><strong>${escapeHtml(candidate.name)}</strong><small>${candidate.excluded ? t("imageExcluded") : t("imageTextAreas", { count: (state.imageRegions.get(candidate.id) || []).length })}</small></span>`;
     elements["image-results"].append(button);
   }
+  elements["image-result-count"].textContent = t("imageOutputCount", {
+    included: state.imageCandidates.filter((candidate) => !candidate.excluded).length,
+    total: state.imageCandidates.length,
+  });
 }
 
 function imageTemporaryProject(detected) {
@@ -1344,6 +1463,48 @@ function imageTemporaryProject(detected) {
       translationBlocked: false,
     }))),
   };
+}
+
+async function setSelectedEntryLanguage() {
+  if (!state.project) return;
+  const selected = state.project.entries.filter((entry) => state.selectedEntryIds.has(entry.id));
+  if (!selected.length) {
+    for (const entry of state.project.entries) {
+      if (languageNeedsReview(entry)) selected.push(entry);
+    }
+  }
+  if (!selected.length) return;
+  const sourceLanguage = elements["bulk-source-language"].value;
+  const temporaryProject = {
+    targetLanguage: state.targetLanguage,
+    namespaces: [],
+    entries: selected.map((entry) => ({
+      ...entry,
+      sourceLanguage,
+      declaredSourceLanguage: sourceLanguage,
+      detectedSourceLanguage: null,
+      languageConfirmed: true,
+      languageConflict: false,
+      languageConfidence: "manual",
+      translationBlocked: false,
+      translation: "",
+      warning: "",
+      status: "pending",
+    })),
+  };
+  setBusy(true);
+  try {
+    await translateProject(temporaryProject, { glossaryText: elements.glossary.value });
+    const translated = new Map(temporaryProject.entries.map((entry) => [entry.id, entry]));
+    for (const entry of selected) Object.assign(entry, translated.get(entry.id));
+    state.selectedEntryIds.clear();
+    renderEntries();
+    showNotice(t("translationComplete"), "success");
+  } catch (error) {
+    showNotice(localizeError(error), "error");
+  } finally {
+    setBusy(false);
+  }
 }
 
 async function processProjectImages() {
@@ -1399,6 +1560,8 @@ async function processProjectImages() {
     for (const region of regions) region.translation = translations.get(`${candidate.id}::${region.id}`) || "";
     state.imageRegions.set(candidate.id, regions);
     const bytes = await renderTranslatedImage(candidate, regions);
+    candidate.renderedBytes = bytes;
+    candidate.excluded = false;
     candidate.previewUrl = await candidatePreviewUrl({ ...candidate, bytes, previewUrl: "" });
     state.project.imageReplacements.push({
       containerId: candidate.containerId,
@@ -1426,6 +1589,7 @@ async function applySelectedImage() {
   try {
     const { renderTranslatedImage } = await import("./image-editor.js");
     const bytes = await renderTranslatedImage(candidate, regions);
+    candidate.renderedBytes = bytes;
     const replacement = {
       containerId: candidate.containerId,
       path: candidate.path,
@@ -1440,13 +1604,88 @@ async function applySelectedImage() {
         && item.path === replacement.path
         && item.sourceProjectIndex === replacement.sourceProjectIndex
       )),
-      replacement,
+      ...(!candidate.excluded ? [replacement] : []),
     ];
     const { candidatePreviewUrl } = await import("./image-editor.js");
     candidate.previewUrl = await candidatePreviewUrl({ ...candidate, bytes, previewUrl: "" });
     await showSelectedImage();
     elements["image-status"].textContent = t("imageApplied");
     showNotice(t("imageApplied"), "success");
+  } catch (error) {
+    showNotice(localizeError(error), "error");
+  } finally {
+    setBusy(false);
+  }
+}
+
+function replacementMatchesCandidate(replacement, candidate) {
+  return replacement.containerId === candidate.containerId
+    && replacement.path === candidate.path
+    && replacement.sourceProjectIndex === candidate.sourceProjectIndex;
+}
+
+function setCandidateOutput(candidate, included) {
+  candidate.excluded = !included;
+  state.project.imageReplacements = (state.project.imageReplacements || [])
+    .filter((replacement) => !replacementMatchesCandidate(replacement, candidate));
+  if (included && candidate.renderedBytes) {
+    state.project.imageReplacements.push({
+      containerId: candidate.containerId,
+      path: candidate.path,
+      bytes: candidate.renderedBytes,
+      ...(Number.isInteger(candidate.sourceProjectIndex) ? { sourceProjectIndex: candidate.sourceProjectIndex } : {}),
+    });
+  }
+}
+
+async function setSelectedImageRegionLanguage() {
+  const regions = (state.imageRegions.get(state.selectedImageId) || [])
+    .filter((region) => state.selectedRegionIds.has(region.id));
+  if (!regions.length) return;
+  const sourceLanguage = elements["image-selection-language"].value;
+  const candidate = selectedImageCandidate();
+  if (!candidate) return;
+  setBusy(true);
+  try {
+    const { createImageRecognizer, cropImageCandidate, ocrLanguageFor } = await import("./image-editor.js");
+    const recognizer = await createImageRecognizer({ languages: [ocrLanguageFor(sourceLanguage)] });
+    try {
+      for (const region of regions) {
+        const crop = await cropImageCandidate(candidate, region);
+        const recognized = await recognizer.recognize(crop);
+        const text = recognized.map((item) => item.text).join(" ").trim();
+        if (text) region.text = text;
+      }
+    } finally {
+      await recognizer.terminate();
+    }
+    const temporaryProject = {
+      targetLanguage: state.targetLanguage,
+      namespaces: [],
+      entries: regions.map((region) => ({
+        id: region.id,
+        key: region.id,
+        source: region.text,
+        sourceLanguage,
+        declaredSourceLanguage: sourceLanguage,
+        translation: "",
+        status: "pending",
+        ignored: false,
+        warning: "",
+        translationBlocked: false,
+        languageConfirmed: true,
+      })),
+    };
+    await translateProject(temporaryProject, { glossaryText: elements.glossary.value });
+    const translated = new Map(temporaryProject.entries.map((entry) => [entry.id, entry.translation]));
+    for (const region of regions) {
+      region.sourceLanguage = sourceLanguage;
+      region.translation = translated.get(region.id) || region.translation;
+      region.confidence = Math.max(70, region.confidence);
+    }
+    await applySelectedImage();
+    renderImageOverlay();
+    renderImageRegions();
   } catch (error) {
     showNotice(localizeError(error), "error");
   } finally {
@@ -1473,6 +1712,10 @@ async function loadFiles(fileList, { scroll = true } = {}) {
   state.imageCandidates = [];
   state.imageRegions = new Map();
   state.selectedImageId = "";
+  state.imageEditing = false;
+  state.imageView = "after";
+  state.selectedRegionIds.clear();
+  state.selectedEntryIds.clear();
   clearNotice();
   elements["drop-zone"].classList.add("loading");
   elements["drop-zone"].querySelector("strong").textContent = t("analyzing");
@@ -1511,6 +1754,7 @@ async function loadFiles(fileList, { scroll = true } = {}) {
     state.imageRegions = new Map();
     state.selectedImageId = "";
     elements["image-panel"].hidden = true;
+    elements["image-edit-button"].textContent = t("imageEdit");
     renderProject({ scroll });
   } catch (error) {
     showNotice(localizeError(error), "error");
@@ -1729,6 +1973,10 @@ function resetWorkspace() {
   state.filter = "warning";
   state.search = "";
   state.bedrockTranslationMode = "localized";
+  state.imageEditing = false;
+  state.imageView = "after";
+  state.selectedRegionIds.clear();
+  state.selectedEntryIds.clear();
   elements.workspace.hidden = true;
   elements["ui-language"].disabled = false;
   elements["ui-language"].removeAttribute("title");
@@ -1736,6 +1984,7 @@ function resetWorkspace() {
   elements["translation-file"].value = "";
   elements["image-panel"].hidden = true;
   elements["image-region-list"].innerHTML = "";
+  elements["image-edit-button"].textContent = t("imageEdit");
   clearNotice();
   if (state.translatorStatus.supported) selectMode("local");
   elements["minecraft-settings"].hidden = false;
@@ -1784,8 +2033,46 @@ elements["image-results"].addEventListener("click", async (event) => {
   const button = event.target.closest("[data-image-id]");
   if (!button) return;
   state.selectedImageId = button.dataset.imageId;
+  state.selectedRegionIds.clear();
   await showSelectedImage();
 });
+document.querySelectorAll("[data-image-view]").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.imageView = button.dataset.imageView;
+    updateImageView();
+  });
+});
+elements["image-compare-slider"].addEventListener("input", updateImageView);
+elements["image-output-toggle"].addEventListener("change", async (event) => {
+  const candidate = selectedImageCandidate();
+  if (!candidate) return;
+  setCandidateOutput(candidate, event.target.checked);
+  await renderImageResultTabs();
+  await showSelectedImage();
+});
+elements["image-edit-button"].addEventListener("click", () => {
+  state.imageEditing = !state.imageEditing;
+  state.selectedRegionIds.clear();
+  elements["image-edit-button"].textContent = t(state.imageEditing ? "imageEditDone" : "imageEdit");
+  renderImageOverlay();
+  renderImageRegions();
+});
+elements["image-selection-clear-button"].addEventListener("click", () => {
+  state.selectedRegionIds.clear();
+  renderImageOverlay();
+  renderImageRegions();
+});
+elements["image-selection-disable-button"].addEventListener("click", async () => {
+  const regions = state.imageRegions.get(state.selectedImageId) || [];
+  for (const region of regions) {
+    if (state.selectedRegionIds.has(region.id)) region.enabled = false;
+  }
+  await applySelectedImage();
+  state.selectedRegionIds.clear();
+  renderImageOverlay();
+  renderImageRegions();
+});
+elements["image-selection-language-button"].addEventListener("click", setSelectedImageRegionLanguage);
 elements["apply-image-button"].addEventListener("click", applySelectedImage);
 elements["image-region-list"].addEventListener("input", (event) => {
   const field = event.target.dataset.regionField;
@@ -1794,8 +2081,97 @@ elements["image-region-list"].addEventListener("input", (event) => {
   const region = (state.imageRegions.get(state.selectedImageId) || []).find((item) => item.id === row.dataset.imageRegion);
   if (!region) return;
   if (field === "enabled") region.enabled = event.target.checked;
-  else if (field === "translation") region.translation = event.target.value;
+  else if (field === "translation" || field === "text") region[field] = event.target.value;
   else region[field] = Number(event.target.value);
+  renderImageOverlay();
+});
+
+elements["image-region-overlay"].addEventListener("click", (event) => {
+  const box = event.target.closest("[data-overlay-region]");
+  if (!box || event.target.closest("[data-overlay-handle]")) return;
+  const id = box.dataset.overlayRegion;
+  if (event.shiftKey || event.metaKey) {
+    if (state.selectedRegionIds.has(id)) state.selectedRegionIds.delete(id);
+    else state.selectedRegionIds.add(id);
+  } else {
+    state.selectedRegionIds.clear();
+    state.selectedRegionIds.add(id);
+  }
+  renderImageOverlay();
+  renderImageRegions();
+});
+
+elements["image-region-overlay"].addEventListener("pointerdown", (event) => {
+  if (!state.imageEditing) return;
+  const overlay = elements["image-region-overlay"];
+  const candidate = selectedImageCandidate();
+  if (!candidate) return;
+  const rect = overlay.getBoundingClientRect();
+  const box = event.target.closest("[data-overlay-region]");
+  const handle = event.target.closest("[data-overlay-handle]")?.dataset.overlayHandle;
+  const region = box
+    ? (state.imageRegions.get(state.selectedImageId) || []).find((item) => item.id === box.dataset.overlayRegion)
+    : null;
+  const startX = event.clientX;
+  const startY = event.clientY;
+  const original = region ? { ...region } : null;
+  let selection = null;
+  if (!region) {
+    selection = document.createElement("div");
+    selection.className = "image-range-selection";
+    overlay.append(selection);
+  }
+  event.preventDefault();
+  overlay.setPointerCapture(event.pointerId);
+  const move = (moveEvent) => {
+    const dx = moveEvent.clientX - startX;
+    const dy = moveEvent.clientY - startY;
+    if (region) {
+      if (handle === "resize") {
+        region.width = Math.max(8, original.width + dx * candidate.width / rect.width);
+        region.height = Math.max(8, original.height + dy * candidate.height / rect.height);
+      } else if (handle === "rotate") {
+        const centerX = rect.left + (original.x + original.width / 2) / candidate.width * rect.width;
+        const centerY = rect.top + (original.y + original.height / 2) / candidate.height * rect.height;
+        region.angle = Math.atan2(moveEvent.clientY - centerY, moveEvent.clientX - centerX) * 180 / Math.PI + 90;
+      } else {
+        region.x = Math.max(0, Math.min(candidate.width - original.width, original.x + dx * candidate.width / rect.width));
+        region.y = Math.max(0, Math.min(candidate.height - original.height, original.y + dy * candidate.height / rect.height));
+      }
+      renderImageOverlay();
+    } else if (selection) {
+      const left = Math.min(startX, moveEvent.clientX) - rect.left;
+      const top = Math.min(startY, moveEvent.clientY) - rect.top;
+      selection.style.cssText = `left:${left}px;top:${top}px;width:${Math.abs(dx)}px;height:${Math.abs(dy)}px`;
+    }
+  };
+  const up = async (upEvent) => {
+    overlay.removeEventListener("pointermove", move);
+    overlay.removeEventListener("pointerup", up);
+    if (selection) {
+      const x0 = Math.min(startX, upEvent.clientX) - rect.left;
+      const y0 = Math.min(startY, upEvent.clientY) - rect.top;
+      const x1 = Math.max(startX, upEvent.clientX) - rect.left;
+      const y1 = Math.max(startY, upEvent.clientY) - rect.top;
+      state.selectedRegionIds.clear();
+      for (const item of state.imageRegions.get(state.selectedImageId) || []) {
+        const left = item.x / candidate.width * rect.width;
+        const top = item.y / candidate.height * rect.height;
+        const right = left + item.width / candidate.width * rect.width;
+        const bottom = top + item.height / candidate.height * rect.height;
+        if (right >= x0 && left <= x1 && bottom >= y0 && top <= y1) state.selectedRegionIds.add(item.id);
+      }
+      selection.remove();
+    } else if (region) {
+      state.selectedRegionIds.clear();
+      state.selectedRegionIds.add(region.id);
+      await applySelectedImage();
+    }
+    renderImageOverlay();
+    renderImageRegions();
+  };
+  overlay.addEventListener("pointermove", move);
+  overlay.addEventListener("pointerup", up);
 });
 for (const eventName of ["dragenter", "dragover"]) {
   elements["drop-zone"].addEventListener(eventName, (event) => {
@@ -1907,6 +2283,24 @@ elements["entry-list"].addEventListener("input", (event) => {
   updateProjectSummary();
 });
 elements["entry-list"].addEventListener("click", (event) => {
+  const languageCheckbox = event.target.closest("[data-language-entry-id]");
+  if (languageCheckbox) {
+    const id = languageCheckbox.dataset.languageEntryId;
+    const selectable = filteredEntries().filter((entry) => languageNeedsReview(entry));
+    if (event.shiftKey && state.lastSelectedEntryId) {
+      const start = selectable.findIndex((entry) => entry.id === state.lastSelectedEntryId);
+      const end = selectable.findIndex((entry) => entry.id === id);
+      if (start >= 0 && end >= 0) {
+        for (const entry of selectable.slice(Math.min(start, end), Math.max(start, end) + 1)) {
+          state.selectedEntryIds.add(entry.id);
+        }
+      }
+    } else if (languageCheckbox.checked) state.selectedEntryIds.add(id);
+    else state.selectedEntryIds.delete(id);
+    state.lastSelectedEntryId = id;
+    renderEntries();
+    return;
+  }
   const id = event.target.closest("[data-ignore-id]")?.dataset.ignoreId;
   if (!id || !state.project) return;
   const entry = state.project.entries.find((candidate) => candidate.id === id);
@@ -1915,6 +2309,7 @@ elements["entry-list"].addEventListener("click", (event) => {
   renderEntries();
   updateProjectSummary();
 });
+elements["apply-bulk-source-language"].addEventListener("click", setSelectedEntryLanguage);
 elements["ignore-ambiguous-button"].addEventListener("click", () => {
   if (!state.project) return;
   for (const entry of state.project.entries) {
