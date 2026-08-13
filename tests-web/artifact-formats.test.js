@@ -273,13 +273,13 @@ test("mcaddon accepts BOM, comments, and trailing commas in Bedrock manifests", 
   const { zip } = resultArchive;
   const rebuiltResource = await JSZip.loadAsync(await zip.file("TNW-R.mcpack").async("uint8array"));
   const rebuiltBehavior = await JSZip.loadAsync(await zip.file("TNW-B.mcpack").async("uint8array"));
-  const resourceManifest = JSON.parse(await rebuiltResource.file("TNW-R/manifest.json").async("string"));
-  const behaviorManifest = JSON.parse(await rebuiltBehavior.file("TNW-B/manifest.json").async("string"));
+  const resourceManifest = JSON.parse(await rebuiltResource.file("manifest.json").async("string"));
+  const behaviorManifest = JSON.parse(await rebuiltBehavior.file("manifest.json").async("string"));
   assert.deepEqual(resourceManifest.header.version, [1, 0, 0]);
   assert.equal(resourceManifest.header.description, "Docs: https://example.com/addon//resources");
   assert.equal(behaviorManifest.dependencies[0].uuid, resourceManifest.header.uuid);
   assert.deepEqual(behaviorManifest.dependencies[0].version, [1, 0, 0]);
-  assert.match(await rebuiltResource.file("TNW-R/texts/ja_JP.lang").async("string"), /テストアイテム/);
+  assert.match(await rebuiltResource.file("texts/ja_JP.lang").async("string"), /テストアイテム/);
 });
 
 test("Bedrock manifest compatibility parsing still rejects incomplete comments", async () => {
@@ -302,7 +302,7 @@ test("Bedrock manifest compatibility parsing still rejects incomplete comments",
   assert.match(result.errors.join(" "), /not valid JSON/);
 });
 
-test("mcaddon preserves loose pack directories and rewrites linked UUIDs", async () => {
+test("mcaddon converts loose pack directories to root-level mcpack files", async () => {
   const resourceUuid = "10101010-1010-1010-1010-101010101010";
   const file = await archiveFile("Folders.mcaddon", {
     "RP/manifest.json": JSON.stringify({
@@ -323,21 +323,31 @@ test("mcaddon preserves loose pack directories and rewrites linked UUIDs", async
     }),
     "BP/functions/start.mcfunction": "say ready\n",
   });
+  const looseArchive = await JSZip.loadAsync(await file.arrayBuffer());
+  const looseValidation = await validateBedrockAddonArchive(looseArchive, {
+    requirePackArchives: true,
+  });
+  assert.equal(looseValidation.valid, false);
+  assert.match(looseValidation.errors.join(" "), /loose pack folders/);
   const project = await analyzeArchive(file);
   assert.equal(project.artifactType, "bedrock_addon");
   translate(project, { "Original title": "翻訳タイトル" });
   const { zip } = await outputZip(project);
-  assert.ok(zip.file("RP/manifest.json"));
-  assert.ok(zip.file("BP/manifest.json"));
-  assert.ok(zip.file("BP/functions/start.mcfunction"));
-  assert.match(await zip.file("RP/texts/ja_JP.lang").async("string"), /翻訳タイトル/);
-  const resourceManifest = JSON.parse(await zip.file("RP/manifest.json").async("string"));
-  const behaviorManifest = JSON.parse(await zip.file("BP/manifest.json").async("string"));
+  assert.equal(zip.file("RP/manifest.json"), null);
+  assert.equal(zip.file("BP/manifest.json"), null);
+  const resourcePack = await JSZip.loadAsync(await zip.file("RP.mcpack").async("uint8array"), { checkCRC32: true });
+  const behaviorPack = await JSZip.loadAsync(await zip.file("BP.mcpack").async("uint8array"), { checkCRC32: true });
+  assert.ok(resourcePack.file("manifest.json"));
+  assert.ok(behaviorPack.file("manifest.json"));
+  assert.ok(behaviorPack.file("functions/start.mcfunction"));
+  assert.match(await resourcePack.file("texts/ja_JP.lang").async("string"), /翻訳タイトル/);
+  const resourceManifest = JSON.parse(await resourcePack.file("manifest.json").async("string"));
+  const behaviorManifest = JSON.parse(await behaviorPack.file("manifest.json").async("string"));
   assert.notEqual(resourceManifest.header.uuid, resourceUuid);
   assert.equal(behaviorManifest.dependencies[0].version, "2.2.0");
   assert.equal(behaviorManifest.dependencies[1].version, "2.1.0");
   assert.equal(behaviorManifest.dependencies[2].uuid, resourceManifest.header.uuid);
-  assert.equal((await validateBedrockAddonArchive(zip)).valid, true);
+  assert.equal((await validateBedrockAddonArchive(zip, { requirePackArchives: true })).valid, true);
 });
 
 test("mcaddon preserves legacy content while creating a separate translated identity", async () => {
@@ -390,31 +400,32 @@ test("mcaddon preserves legacy content while creating a separate translated iden
   const { zip, filename } = await outputZip(project);
   assert.equal(filename, "TNW-like.ja_JP.mcaddon");
   assert.equal((await validateBedrockAddonArchive(zip)).valid, true);
-  assert.ok(zip.file("TNW-B/manifest.json"));
-  assert.ok(zip.file("TNW-Patch-B/manifest.json"));
-  assert.ok(zip.file("TNW-R/manifest.json"));
+  assert.equal(zip.file("TNW-B/manifest.json"), null);
+  const behaviorPack = await JSZip.loadAsync(await zip.file("TNW-B.mcpack").async("uint8array"), { checkCRC32: true });
+  const patchPack = await JSZip.loadAsync(await zip.file("TNW-Patch-B.mcpack").async("uint8array"), { checkCRC32: true });
+  const resourcePack = await JSZip.loadAsync(await zip.file("TNW-R.mcpack").async("uint8array"), { checkCRC32: true });
 
-  const behaviorManifest = JSON.parse(await zip.file("TNW-B/manifest.json").async("string"));
-  const patchManifest = JSON.parse(await zip.file("TNW-Patch-B/manifest.json").async("string"));
+  const behaviorManifest = JSON.parse(await behaviorPack.file("manifest.json").async("string"));
+  const patchManifest = JSON.parse(await patchPack.file("manifest.json").async("string"));
   assert.equal(behaviorManifest.modules[0].language, "javascript");
   assert.deepEqual(behaviorManifest.capabilities, ["script_eval"]);
   assert.equal(patchManifest.modules[0].language, "javascript");
   assert.equal(patchManifest.modules[0].entry, "scripts/main.js");
   assert.notEqual(patchManifest.modules[0].uuid, behaviorUuid);
   assert.deepEqual(patchManifest.dependencies, [{ module_name: "mojang-minecraft", version: "0.1.0" }]);
-  assert.match(await zip.file("TNW-Patch-B/scripts/main.js").async("string"), /mojang-minecraft/);
-  const resourceManifest = JSON.parse(await zip.file("TNW-R/manifest.json").async("string"));
+  assert.match(await patchPack.file("scripts/main.js").async("string"), /mojang-minecraft/);
+  const resourceManifest = JSON.parse(await resourcePack.file("manifest.json").async("string"));
   assert.equal(resourceManifest.capabilities, undefined);
-  assert.ok(zip.file("TNW-R/pack_icon.png"));
-  assert.ok(zip.file("TNW-R/textures/blocks/example.texture_set.json"));
+  assert.ok(resourcePack.file("pack_icon.png"));
+  assert.ok(resourcePack.file("textures/blocks/example.texture_set.json"));
   assert.deepEqual(
-    JSON.parse(await zip.file("TNW-R/sounds/sound_definitions.json").async("string")).sound_definitions.example.sounds,
+    JSON.parse(await resourcePack.file("sounds/sound_definitions.json").async("string")).sound_definitions.example.sounds,
     ["sounds/example/one"],
   );
-  assert.ok(zip.file("TNW-R/disabled.json"));
-  assert.ok(zip.file("TNW-R/disabled-feature.txt"));
-  assert.ok(zip.file("TNW-R/disabled-invalid-feature.txt"));
-  assert.match(await zip.file("TNW-R/notes.txt").async("string"), /ordinary note/);
+  assert.ok(resourcePack.file("disabled.json"));
+  assert.ok(resourcePack.file("disabled-feature.txt"));
+  assert.ok(resourcePack.file("disabled-invalid-feature.txt"));
+  assert.match(await resourcePack.file("notes.txt").async("string"), /ordinary note/);
 });
 
 test("single-language Add-ons without languages.json are marked as uncertain", async () => {
@@ -503,7 +514,7 @@ test("forced mcaddon output replaces the source lang but preserves omitted lines
   );
 });
 
-test("mcaddon preserves nested zip names and wrapper directories", async () => {
+test("mcaddon converts nested Bedrock zip files to normalized mcpacks", async () => {
   const resourceUuid = "55555555-5555-5555-5555-555555555555";
   const resource = new JSZip();
   resource.file("ExampleR/manifest.json", JSON.stringify({
@@ -537,26 +548,26 @@ test("mcaddon preserves nested zip names and wrapper directories", async () => {
   );
   translate(project, { "Example Creature": "サンプルの生物" });
   const { zip } = await outputZip(project);
-  assert.ok(zip.file("ExampleR.zip"));
-  assert.ok(zip.file("ExampleB.zip"));
-  const rebuiltResource = await JSZip.loadAsync(await zip.file("ExampleR.zip").async("uint8array"));
-  const rebuiltBehavior = await JSZip.loadAsync(await zip.file("ExampleB.zip").async("uint8array"));
-  assert.ok(rebuiltResource.file("ExampleR/manifest.json"));
-  assert.ok(rebuiltBehavior.file("ExampleB/manifest.json"));
-  assert.match(await rebuiltResource.file("ExampleR/texts/ja_JP.lang").async("string"), /サンプルの生物/);
+  assert.equal(zip.file("ExampleR.zip"), null);
+  assert.equal(zip.file("ExampleB.zip"), null);
+  const rebuiltResource = await JSZip.loadAsync(await zip.file("ExampleR.mcpack").async("uint8array"), { checkCRC32: true });
+  const rebuiltBehavior = await JSZip.loadAsync(await zip.file("ExampleB.mcpack").async("uint8array"), { checkCRC32: true });
+  assert.ok(rebuiltResource.file("manifest.json"));
+  assert.ok(rebuiltBehavior.file("manifest.json"));
+  assert.match(await rebuiltResource.file("texts/ja_JP.lang").async("string"), /サンプルの生物/);
   assert.deepEqual(
-    JSON.parse(await rebuiltResource.file("ExampleR/manifest.json").async("string")).header.version,
+    JSON.parse(await rebuiltResource.file("manifest.json").async("string")).header.version,
     [3, 2, 1],
   );
-  const resourceManifest = JSON.parse(await rebuiltResource.file("ExampleR/manifest.json").async("string"));
-  const behaviorManifest = JSON.parse(await rebuiltBehavior.file("ExampleB/manifest.json").async("string"));
+  const resourceManifest = JSON.parse(await rebuiltResource.file("manifest.json").async("string"));
+  const behaviorManifest = JSON.parse(await rebuiltBehavior.file("manifest.json").async("string"));
   assert.equal(behaviorManifest.dependencies[0].uuid, resourceManifest.header.uuid);
   assert.deepEqual(behaviorManifest.dependencies[0].version, [3, 2, 1]);
   assert.ok(zip.file("Unrelated.zip"));
-  assert.equal((await validateBedrockAddonArchive(zip)).valid, true);
+  assert.equal((await validateBedrockAddonArchive(zip, { requirePackArchives: true })).valid, true);
 });
 
-test("mcaddon preserves unchanged wrapped pack archives", async () => {
+test("mcaddon normalizes unchanged wrapped pack archives", async () => {
   const behavior = new JSZip();
   behavior.file("StandaloneB/manifest.json", JSON.stringify({
     format_version: 2,
@@ -580,13 +591,14 @@ test("mcaddon preserves unchanged wrapped pack archives", async () => {
   assert.equal(project.artifactType, "bedrock_addon");
   assert.equal(project.entries.length, 0);
   const { zip } = await outputZip(project);
-  assert.ok(zip.file("StandaloneB.zip"));
+  assert.equal(zip.file("StandaloneB.zip"), null);
   const rebuilt = await JSZip.loadAsync(
-    await zip.file("StandaloneB.zip").async("uint8array"),
+    await zip.file("StandaloneB.mcpack").async("uint8array"),
+    { checkCRC32: true },
   );
-  assert.ok(rebuilt.file("StandaloneB/manifest.json"));
-  assert.ok(rebuilt.file("StandaloneB/functions/setup.mcfunction"));
-  assert.equal((await validateBedrockAddonArchive(zip)).valid, true);
+  assert.ok(rebuilt.file("manifest.json"));
+  assert.ok(rebuilt.file("functions/setup.mcfunction"));
+  assert.equal((await validateBedrockAddonArchive(zip, { requirePackArchives: true })).valid, true);
 });
 
 test("mcaddon exports use fresh linked UUIDs without version regression", async () => {

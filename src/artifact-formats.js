@@ -784,7 +784,10 @@ export async function validateBedrockPack(zip, { label = "Bedrock pack" } = {}) 
   };
 }
 
-export async function validateBedrockAddonArchive(zip, { label = "Bedrock Add-on" } = {}) {
+export async function validateBedrockAddonArchive(zip, {
+  label = "Bedrock Add-on",
+  requirePackArchives = false,
+} = {}) {
   const errors = [];
   const warnings = [];
   const packs = [];
@@ -798,7 +801,12 @@ export async function validateBedrockAddonArchive(zip, { label = "Bedrock Add-on
     packs.push({ name, manifest: await readJson(manifestEntry) });
   };
 
-  for (const manifestEntry of manifestEntries(zip)) {
+  const looseManifests = manifestEntries(zip);
+  if (requirePackArchives && looseManifests.length) {
+    errors.push(`${label}: loose pack folders are not allowed in exported .mcaddon files; use .mcpack entries.`);
+  }
+
+  for (const manifestEntry of requirePackArchives ? [] : looseManifests) {
     const prefix = manifestEntry.name.slice(0, -"manifest.json".length);
     const packZip = new JSZip();
     for (const entry of outerFiles) {
@@ -808,7 +816,13 @@ export async function validateBedrockAddonArchive(zip, { label = "Bedrock Add-on
     await addPack(packZip, prefix.replace(/\/$/, "") || "root pack");
   }
 
-  for (const entry of outerFiles.filter((item) => /\.(?:mcpack|zip)$/i.test(item.name))) {
+  for (const entry of outerFiles.filter((item) => (
+    requirePackArchives ? /\.mcpack$/i : /\.(?:mcpack|zip)$/i
+  ).test(item.name))) {
+    if (requirePackArchives && entry.name.includes("/")) {
+      errors.push(`${label}: ${entry.name} must be at the root of the .mcaddon archive.`);
+      continue;
+    }
     try {
       const packZip = await JSZip.loadAsync(await entry.async("uint8array"), {
         createFolders: false,
@@ -860,6 +874,83 @@ export async function validateBedrockAddonArchive(zip, { label = "Bedrock Add-on
   }
 
   return { valid: errors.length === 0, errors, warnings, packs: packs.map((pack) => pack.name) };
+}
+
+function uniqueBedrockPackName(preferredName, usedNames) {
+  const rawBase = String(preferredName || "pack")
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter(Boolean)
+    .pop()
+    ?.replace(/\.(?:zip|mcpack)$/i, "") || "pack";
+  const base = rawBase.replace(/[\u0000-\u001f<>:"/\\|?*]+/g, "-") || "pack";
+  let candidate = `${base}.mcpack`;
+  let suffix = 2;
+  while (usedNames.has(candidate.toLowerCase())) {
+    candidate = `${base}-${suffix}.mcpack`;
+    suffix += 1;
+  }
+  usedNames.add(candidate.toLowerCase());
+  return candidate;
+}
+
+async function normalizedBedrockPack(zip, rootPrefix = "") {
+  const normalized = new JSZip();
+  for (const entry of Object.values(zip.files)) {
+    if (entry.dir || !entry.name.startsWith(rootPrefix)) continue;
+    const outputPath = entry.name.slice(rootPrefix.length);
+    if (outputPath) normalized.file(outputPath, await entry.async("uint8array"));
+  }
+  return normalized;
+}
+
+async function canonicalizeBedrockAddonArchive(root, archiveOptions, fileName) {
+  const outerFiles = Object.values(root.files).filter((entry) => !entry.dir);
+  const loosePrefixes = manifestEntries(root)
+    .map((entry) => entry.name.slice(0, -"manifest.json".length))
+    .sort((left, right) => left.length - right.length)
+    .filter((prefix, index, values) => !values.slice(0, index).some((parent) => prefix.startsWith(parent)));
+  const nestedPacks = [];
+  for (const entry of outerFiles.filter((item) => /\.(?:mcpack|zip)$/i.test(item.name))) {
+    try {
+      const packZip = await JSZip.loadAsync(await entry.async("uint8array"), {
+        createFolders: false,
+        checkCRC32: true,
+      });
+      const packRootPrefix = await bedrockPackRootPrefix(packZip);
+      if (packRootPrefix !== null) nestedPacks.push({ entry, packZip, packRootPrefix });
+    } catch {
+      // Preserve unrelated or malformed ZIP files; strict validation still
+      // rejects malformed .mcpack entries before the final download is built.
+    }
+  }
+
+  const consumedNestedPaths = new Set(nestedPacks.map(({ entry }) => entry.name));
+  const belongsToLoosePack = (path) => loosePrefixes.some((prefix) => path.startsWith(prefix));
+  const canonical = new JSZip();
+  const usedNames = new Set();
+  for (const entry of outerFiles) {
+    if (belongsToLoosePack(entry.name) || consumedNestedPaths.has(entry.name)) continue;
+    canonical.file(entry.name, await entry.async("uint8array"));
+    usedNames.add(entry.name.toLowerCase());
+  }
+
+  for (const prefix of loosePrefixes) {
+    const pack = await normalizedBedrockPack(root, prefix);
+    const preferredName = prefix.replace(/\/$/, "") || String(fileName).replace(ARCHIVE_EXTENSION, "");
+    canonical.file(
+      uniqueBedrockPackName(preferredName, usedNames),
+      await pack.generateAsync(archiveOptions("uint8array")),
+    );
+  }
+  for (const { entry, packZip, packRootPrefix } of nestedPacks) {
+    const pack = await normalizedBedrockPack(packZip, packRootPrefix);
+    canonical.file(
+      uniqueBedrockPackName(entry.name, usedNames),
+      await pack.generateAsync(archiveOptions("uint8array")),
+    );
+  }
+  return canonical;
 }
 
 function cloneJson(value) {
@@ -1159,8 +1250,8 @@ export async function buildArtifactArchive(project, {
     const childRootPrefix = project.artifactType === "bedrock_addon"
       ? container.rootPrefix || ""
       : "";
-    // Keep the author's container filename, wrapper directory, and archive
-    // layout. Minecraft packs in the wild rely on both loose and nested forms.
+    // Apply edits before the final Add-on pass converts every detected pack
+    // to a root-level .mcpack with manifest.json at its archive root.
     await applyDocuments(child, childDocuments);
     for (const replacement of childImageReplacements) child.file(replacement.path, replacement.bytes);
     await applyBedrockVersionPlan(child, container.id, bedrockVersionPlan, {
@@ -1174,7 +1265,11 @@ export async function buildArtifactArchive(project, {
   }
 
   if (project.artifactType === "bedrock_addon") {
-    const result = await validateBedrockAddonArchive(root, { label: project.fileName });
+    root = await canonicalizeBedrockAddonArchive(root, archiveOptions, project.fileName);
+    const result = await validateBedrockAddonArchive(root, {
+      label: project.fileName,
+      requirePackArchives: true,
+    });
     if (!result.valid) {
       throw new Error(`Bedrock Add-on output validation failed: ${result.errors.join(" ")}`);
     }
