@@ -5,6 +5,7 @@ import JSZip from "jszip";
 import { readLevelDb } from "mcbe-leveldb-reader";
 
 import { analyzeArchive, buildResourcePack, combineProjects } from "../src/core.js";
+import { validateBedrockPack } from "../src/artifact-formats.js";
 import {
   NBT_TAG,
   decodeNbtSequence,
@@ -196,6 +197,85 @@ test("mcaddon containers rebuild their nested packs", async () => {
   const rebuilt = await JSZip.loadAsync(await zip.file("Creatures-Resources.mcpack").async("uint8array"));
   assert.match(await rebuilt.file("texts/ja_JP.lang").async("string"), /サンプルの生物/);
   assert.match(await rebuilt.file("texts/en_US.lang").async("string"), /Example Creature/);
+});
+
+test("mcaddon accepts BOM, comments, and trailing commas in Bedrock manifests", async () => {
+  const resourceUuid = "51515151-5151-5151-5151-515151515151";
+  const resource = new JSZip();
+  resource.file("TNW-R/manifest.json", `\uFEFF{
+    // Some published Bedrock packs use JSON with comments.
+    "format_version": 2,
+    "header": {
+      "name": "TNW resources",
+      "description": "Docs: https://example.com/addon//resources",
+      "uuid": "${resourceUuid}",
+      "version": [1, 0, 0],
+    },
+    "modules": [{
+      "type": "resources",
+      "uuid": "52525252-5252-5252-5252-525252525252",
+      "version": [1, 0, 0],
+    }],
+  }`);
+  resource.file("TNW-R/texts/en_US.lang", "item.tnw.name=Test item\n");
+
+  const behavior = new JSZip();
+  behavior.file("TNW-B/manifest.json", `{
+    /* Keep the linked behavior pack in sync. */
+    "format_version": 2,
+    "header": {
+      "name": "TNW behavior",
+      "description": "Behavior pack",
+      "uuid": "53535353-5353-5353-5353-535353535353",
+      "version": [1, 0, 0]
+    },
+    "modules": [{
+      "type": "data",
+      "uuid": "54545454-5454-5454-5454-545454545454",
+      "version": [1, 0, 0]
+    }],
+    "dependencies": [{
+      "uuid": "${resourceUuid}",
+      "version": [1, 0, 0],
+    }],
+  }`);
+
+  const file = await archiveFile("TNW.mcaddon", {
+    "TNW-R.mcpack": await resource.generateAsync({ type: "uint8array" }),
+    "TNW-B.mcpack": await behavior.generateAsync({ type: "uint8array" }),
+  });
+  const project = await analyzeArchive(file);
+  assert.equal(project.artifactType, "bedrock_addon");
+  translate(project, { "Test item": "テストアイテム" });
+  const { zip } = await outputZip(project);
+  const rebuiltResource = await JSZip.loadAsync(await zip.file("TNW-R.mcpack").async("uint8array"));
+  const rebuiltBehavior = await JSZip.loadAsync(await zip.file("TNW-B.mcpack").async("uint8array"));
+  const resourceManifest = JSON.parse(await rebuiltResource.file("TNW-R/manifest.json").async("string"));
+  const behaviorManifest = JSON.parse(await rebuiltBehavior.file("TNW-B/manifest.json").async("string"));
+  assert.deepEqual(resourceManifest.header.version, [1, 0, 1]);
+  assert.equal(resourceManifest.header.description, "Docs: https://example.com/addon//resources");
+  assert.deepEqual(behaviorManifest.dependencies[0].version, [1, 0, 1]);
+  assert.match(await rebuiltResource.file("TNW-R/texts/ja_JP.lang").async("string"), /テストアイテム/);
+});
+
+test("Bedrock manifest compatibility parsing still rejects incomplete comments", async () => {
+  const pack = new JSZip();
+  pack.file("manifest.json", `{
+    "format_version": 2,
+    "header": {
+      "name": "Broken",
+      "uuid": "61616161-6161-6161-6161-616161616161",
+      "version": [1, 0, 0]
+    },
+    "modules": [{
+      "type": "resources",
+      "uuid": "62626262-6262-6262-6262-626262626262",
+      "version": [1, 0, 0]
+    }]
+  } /*`);
+  const result = await validateBedrockPack(pack);
+  assert.equal(result.valid, false);
+  assert.match(result.errors.join(" "), /not valid JSON/);
 });
 
 test("mcaddon directory packs preserve both roots instead of discarding a sibling pack", async () => {
