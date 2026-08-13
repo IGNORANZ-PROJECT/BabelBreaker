@@ -99,11 +99,10 @@ export async function candidatePreviewUrl(candidate) {
   return canvas.toDataURL("image/png");
 }
 
-export async function recognizeImageText(candidate, {
+export async function createImageRecognizer({
   languages = ["eng"],
   onProgress = () => {},
 } = {}) {
-  const canvas = await canvasFromCandidate(candidate);
   const worker = await createWorker(languages, OEM.LSTM_ONLY, {
     workerPath: "https://cdn.jsdelivr.net/npm/tesseract.js@v7.0.0/dist/worker.min.js",
     corePath: "https://cdn.jsdelivr.net/npm/tesseract.js-core@v7.0.0",
@@ -111,16 +110,18 @@ export async function recognizeImageText(candidate, {
       onProgress({ status: message.status, percent: Math.round((message.progress || 0) * 100) });
     },
   });
-  try {
-    await worker.setParameters({
-      tessedit_pageseg_mode: PSM.SPARSE_TEXT_OSD,
-      user_defined_dpi: "300",
-    });
+  await worker.setParameters({
+    tessedit_pageseg_mode: PSM.SPARSE_TEXT_OSD,
+    user_defined_dpi: "300",
+  });
+  return {
+    async recognize(candidate) {
+      const canvas = await canvasFromCandidate(candidate);
     const result = await worker.recognize(canvas, { rotateAuto: true }, { text: true, blocks: true });
     const lines = (result.data.blocks || [])
       .flatMap((block) => block.paragraphs || [])
       .flatMap((paragraph) => paragraph.lines || []);
-    return lines
+      return lines
       .map((line, index) => {
         const text = String(line.text || "").replace(/\s+/g, " ").trim();
         const bbox = line.bbox || {};
@@ -140,9 +141,20 @@ export async function recognizeImageText(candidate, {
           enabled: true,
         };
       })
-      .filter((region) => region.text && /\p{L}/u.test(region.text) && region.confidence >= 25);
+        .filter((region) => region.text && /\p{L}/u.test(region.text) && region.confidence >= 25);
+    },
+    terminate() {
+      return worker.terminate();
+    },
+  };
+}
+
+export async function recognizeImageText(candidate, options = {}) {
+  const recognizer = await createImageRecognizer(options);
+  try {
+    return await recognizer.recognize(candidate);
   } finally {
-    await worker.terminate();
+    await recognizer.terminate();
   }
 }
 
