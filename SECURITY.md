@@ -31,9 +31,13 @@ Please include:
 - Source languages are inferred from archive locale filenames; no source text is sent to a language-detection service.
 - Compressed local model files are pinned to an immutable Hugging Face commit by URL, byte size, and SHA-256 and are checked before browser-side decompression.
 - Firebase production builds exclude model binaries; CSP permits model downloads only from the selected Hugging Face delivery hosts.
+- Optional OCR is user-initiated. Tesseract.js 7.0.0, tesseract.js-core 7.0.0, and versioned OCR language packages are fetched directly from jsDelivr; CSP does not permit other third-party script hosts.
 - Non-English translation pivots through English entirely inside local WebAssembly workers.
+- Archive analysis and generation run in a dedicated module worker. OCR and translation use their own workers so heavy parsing does not block the main interface.
 - Untrusted archives are subject to path, entry-count, format, namespace, and decompressed-size validation.
+- Image scanning is limited by candidate count, per-image bytes, total bytes, dimensions, and supported encodings before OCR is available.
 - Nested archives and Java region chunks have separate depth, count, compressed-ratio, and expanded-byte limits.
 - Java regions are rebuilt from parsed chunks instead of using in-place byte replacement; unsupported external chunks are preserved.
-- Bedrock pack UUIDs are retained, dependency versions are updated together, and Bedrock World LevelDB data is not rewritten.
+- Bedrock pack UUIDs are retained, dependency versions are updated together, original nested filenames and wrapper directories are preserved, and rebuilt manifests are validated before download.
+- Bedrock World database tables are not rewritten in place; translated records are emitted through a checksummed additive LevelDB log.
 - Server plugin JARs are never rewritten; output contains locale patch files only.

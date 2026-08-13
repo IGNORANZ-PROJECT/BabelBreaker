@@ -595,7 +595,7 @@ async function analyzeGameArchive(
   file,
   game,
   targetLanguage,
-  sourceZip,
+  sourceBytes,
 ) {
   const language = getTargetLanguage(targetLanguage);
   const targetLocale = getGameTargetLocale(game, language.id);
@@ -791,7 +791,7 @@ async function analyzeGameArchive(
     namespaces,
     entries,
     warnings,
-    sourceZip,
+    sourceBytes,
     createdAt: new Date().toISOString(),
   };
 }
@@ -1171,7 +1171,7 @@ export async function analyzeArchive(
         file,
         detectedGame,
         language.id,
-        zip,
+        archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData),
       );
       if (project) return project;
     }
@@ -1411,6 +1411,7 @@ export async function analyzeArchive(
     warnings,
     contentKinds: minecraftContent.kinds,
     requiresInstanceInstall: minecraftContent.requiresInstanceInstall,
+    sourceBytes: archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData),
     createdAt: new Date().toISOString(),
   };
 }
@@ -2400,16 +2401,19 @@ async function buildSingleGameArchive(project, outputType) {
   const game = project.game;
 
   if (game === "factorio" || game === "stardew") {
-    if (!project.sourceZip) {
+    if (!project.sourceBytes) {
       throw new Error("元のMODアーカイブを再読み込みしてください。");
     }
-    const zip = project.sourceZip;
+    const zip = await JSZip.loadAsync(project.sourceBytes, { createFolders: false });
     for (const namespace of project.namespaces) {
       const translated = buildTranslatedNamespace(project, namespace);
       zip.file(
         namespace.outputPath,
         stringifyTranslatedNamespace(namespace, translated),
       );
+    }
+    for (const replacement of project.imageReplacements || []) {
+      if (replacement.containerId === "root") zip.file(replacement.path, replacement.bytes);
     }
     const readmePath = `${project.mod.root || ""}_BABEL_BREAKER_README.txt`;
     zip.file(readmePath, fullModReadme(project, stats));
@@ -2478,6 +2482,9 @@ function applyBatchTranslations(project, sourceProject, sourceProjectIndex) {
   );
   return {
     ...sourceProject,
+    imageReplacements: (project.imageReplacements || [])
+      .filter((replacement) => replacement.sourceProjectIndex === sourceProjectIndex)
+      .map(({ sourceProjectIndex: _sourceProjectIndex, ...replacement }) => replacement),
     entries: sourceProject.entries.map((entry) => {
       const combined = bySourceEntry.get(String(entry.id));
       if (!combined) return { ...entry };
@@ -2594,6 +2601,14 @@ export async function buildResourcePack(
   const instanceDocuments = [];
   let hasResourcePackContent = false;
   zip.file("pack.mcmeta", `${JSON.stringify(buildPackMetadata(project, versionId), null, 2)}\n`);
+
+  for (const replacement of project.imageReplacements || []) {
+    const path = replacement.path.replace(/^.*?(assets\/)/i, "$1");
+    if (path.startsWith("assets/")) {
+      zip.file(path, replacement.bytes);
+      hasResourcePackContent = true;
+    }
+  }
 
   for (const namespace of project.namespaces) {
     if (namespace.contentDocument) {

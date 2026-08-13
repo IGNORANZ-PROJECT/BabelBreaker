@@ -198,6 +198,33 @@ test("mcaddon containers rebuild their nested packs", async () => {
   assert.match(await rebuilt.file("texts/en_US.lang").async("string"), /Example Creature/);
 });
 
+test("mcaddon directory packs preserve both roots instead of discarding a sibling pack", async () => {
+  const resourceUuid = "10101010-1010-1010-1010-101010101010";
+  const file = await archiveFile("Folders.mcaddon", {
+    "RP/manifest.json": JSON.stringify({
+      format_version: 2,
+      header: { name: "RP", description: "Resources", uuid: resourceUuid, version: [1, 0, 0] },
+      modules: [{ type: "resources", uuid: "20202020-2020-2020-2020-202020202020", version: [1, 0, 0] }],
+    }),
+    "RP/texts/en_US.lang": "title=Original title\n",
+    "BP/manifest.json": JSON.stringify({
+      format_version: 2,
+      header: { name: "BP", description: "Behavior", uuid: "30303030-3030-3030-3030-303030303030", version: [1, 0, 0] },
+      modules: [{ type: "data", uuid: "40404040-4040-4040-4040-404040404040", version: [1, 0, 0] }],
+      dependencies: [{ uuid: resourceUuid, version: [1, 0, 0] }],
+    }),
+    "BP/functions/start.mcfunction": "say ready\n",
+  });
+  const project = await analyzeArchive(file);
+  assert.equal(project.artifactType, "bedrock_addon");
+  translate(project, { "Original title": "翻訳タイトル" });
+  const { zip } = await outputZip(project);
+  assert.ok(zip.file("RP/manifest.json"));
+  assert.ok(zip.file("BP/manifest.json"));
+  assert.ok(zip.file("BP/functions/start.mcfunction"));
+  assert.match(await zip.file("RP/texts/ja_JP.lang").async("string"), /翻訳タイトル/);
+});
+
 test("single-language Add-ons without languages.json are marked as uncertain", async () => {
   const resource = new JSZip();
   resource.file("manifest.json", JSON.stringify({
@@ -284,7 +311,7 @@ test("forced mcaddon output replaces the source lang but preserves omitted lines
   );
 });
 
-test("mcaddon containers accept nested Bedrock packs distributed as zip files", async () => {
+test("mcaddon containers preserve nested zip filenames and wrapper directories", async () => {
   const resourceUuid = "55555555-5555-5555-5555-555555555555";
   const resource = new JSZip();
   resource.file("ExampleR/manifest.json", JSON.stringify({
@@ -318,25 +345,27 @@ test("mcaddon containers accept nested Bedrock packs distributed as zip files", 
   );
   translate(project, { "Example Creature": "サンプルの生物" });
   const { zip } = await outputZip(project);
-  assert.equal(zip.file("ExampleR.zip"), null);
-  assert.equal(zip.file("ExampleB.zip"), null);
-  const rebuiltResource = await JSZip.loadAsync(await zip.file("ExampleR.mcpack").async("uint8array"));
-  const rebuiltBehavior = await JSZip.loadAsync(await zip.file("ExampleB.mcpack").async("uint8array"));
-  assert.equal(rebuiltResource.file("ExampleR/manifest.json"), null);
-  assert.equal(rebuiltBehavior.file("ExampleB/manifest.json"), null);
-  assert.match(await rebuiltResource.file("texts/ja_JP.lang").async("string"), /サンプルの生物/);
+  assert.ok(zip.file("ExampleR.zip"));
+  assert.ok(zip.file("ExampleB.zip"));
+  assert.equal(zip.file("ExampleR.mcpack"), null);
+  assert.equal(zip.file("ExampleB.mcpack"), null);
+  const rebuiltResource = await JSZip.loadAsync(await zip.file("ExampleR.zip").async("uint8array"));
+  const rebuiltBehavior = await JSZip.loadAsync(await zip.file("ExampleB.zip").async("uint8array"));
+  assert.ok(rebuiltResource.file("ExampleR/manifest.json"));
+  assert.ok(rebuiltBehavior.file("ExampleB/manifest.json"));
+  assert.match(await rebuiltResource.file("ExampleR/texts/ja_JP.lang").async("string"), /サンプルの生物/);
   assert.deepEqual(
-    JSON.parse(await rebuiltResource.file("manifest.json").async("string")).header.version,
+    JSON.parse(await rebuiltResource.file("ExampleR/manifest.json").async("string")).header.version,
     [3, 2, 2],
   );
   assert.deepEqual(
-    JSON.parse(await rebuiltBehavior.file("manifest.json").async("string")).dependencies[0].version,
+    JSON.parse(await rebuiltBehavior.file("ExampleB/manifest.json").async("string")).dependencies[0].version,
     [3, 2, 2],
   );
   assert.ok(zip.file("Unrelated.zip"));
 });
 
-test("mcaddon normalizes recognized zip packs even when they contain no translatable text", async () => {
+test("mcaddon leaves unchanged nested packs byte-for-byte addressable at their original path", async () => {
   const behavior = new JSZip();
   behavior.file("StandaloneB/manifest.json", JSON.stringify({
     format_version: 2,
@@ -360,13 +389,13 @@ test("mcaddon normalizes recognized zip packs even when they contain no translat
   assert.equal(project.artifactType, "bedrock_addon");
   assert.equal(project.entries.length, 0);
   const { zip } = await outputZip(project);
-  assert.equal(zip.file("StandaloneB.zip"), null);
+  assert.ok(zip.file("StandaloneB.zip"));
+  assert.equal(zip.file("StandaloneB.mcpack"), null);
   const rebuilt = await JSZip.loadAsync(
-    await zip.file("StandaloneB.mcpack").async("uint8array"),
+    await zip.file("StandaloneB.zip").async("uint8array"),
   );
-  assert.ok(rebuilt.file("manifest.json"));
-  assert.ok(rebuilt.file("functions/setup.mcfunction"));
-  assert.equal(rebuilt.file("StandaloneB/manifest.json"), null);
+  assert.ok(rebuilt.file("StandaloneB/manifest.json"));
+  assert.ok(rebuilt.file("StandaloneB/functions/setup.mcfunction"));
 });
 
 test("mcaddon versions and UUID dependencies stay consistent after a pack changes", async () => {

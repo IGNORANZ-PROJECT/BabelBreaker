@@ -6,12 +6,10 @@ import {
   MINECRAFT_VERSIONS,
   SUPPORTED_ARTIFACTS,
   SUPPORTED_GAMES,
-  analyzeArchive,
   applyClipboardTranslation,
   buildClipboardPayload,
   buildTranslationRequest,
   combineProjects,
-  buildResourcePack,
   getEntryWorkflowState,
   getLocalTranslatorStatus,
   getProjectStats,
@@ -33,6 +31,11 @@ import {
 } from "./i18n.js";
 import { selectGuideForProject } from "./guide-selection.js";
 import { SHOW_PROJECT_INFO } from "./site-config.js";
+import {
+  analyzeArchiveInBackground,
+  buildArchiveInBackground,
+  scanImagesInBackground,
+} from "./archive-jobs.js";
 
 const initialUrl = new URL(window.location.href);
 const requestedUiLocale = initialUrl.searchParams.get("lang");
@@ -65,6 +68,9 @@ const state = {
   guideGame: "minecraft",
   minecraftGuideMode: "javaMod",
   bedrockTranslationMode: "localized",
+  imageCandidates: [],
+  imageRegions: new Map(),
+  selectedImageId: "",
 };
 const CONTENT_KIND_LABELS = {
   patchouli: "Patchouli",
@@ -340,6 +346,34 @@ document.querySelector("#app").innerHTML = `
         </aside>
       </div>
 
+      <section class="image-panel panel" id="image-panel">
+        <div class="image-panel-heading">
+          <div>
+            <span class="optional-label">${t("optional")}</span>
+            <h3>${t("imageTranslationTitle")}</h3>
+            <p>${t("imageTranslationCopy")}</p>
+          </div>
+          <button class="secondary-button" id="scan-images-button" type="button">${t("imageScanButton")}</button>
+        </div>
+        <p class="image-local-note">${icon("lock", 14)} ${t("imageLocalOnly")}</p>
+        <div class="image-workspace" id="image-workspace" hidden>
+          <div class="image-toolbar">
+            <label for="image-candidate-select">${t("imageChoose")}</label>
+            <select id="image-candidate-select"></select>
+            <button class="primary-button compact" id="ocr-image-button" type="button">${t("imageOcrButton")}</button>
+          </div>
+          <small class="image-ocr-note">${t("imageOcrDownload")}</small>
+          <div class="image-editor-layout">
+            <div class="image-preview-shell"><img id="image-preview" alt="" /></div>
+            <div>
+              <p class="image-status" id="image-status"></p>
+              <div class="image-region-list" id="image-region-list"></div>
+              <button class="secondary-button image-apply-button" id="apply-image-button" type="button" hidden>${t("imageApplyButton")}</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="progress-panel panel" id="progress-panel" hidden>
         <div class="progress-copy">
           <div>
@@ -581,6 +615,15 @@ const elements = Object.fromEntries(
     "bedrock-output-mode",
     "bedrock-output-mode-copy",
     "bedrock-localization-status",
+    "image-panel",
+    "scan-images-button",
+    "image-workspace",
+    "image-candidate-select",
+    "ocr-image-button",
+    "image-preview",
+    "image-status",
+    "image-region-list",
+    "apply-image-button",
     "download-warning-dialog",
     "download-warning-title",
     "download-warning-copy",
@@ -1212,6 +1255,169 @@ function showReview() {
   elements["review-panel"].scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+function selectedImageCandidate() {
+  return state.imageCandidates.find((candidate) => candidate.id === state.selectedImageId) || null;
+}
+
+async function showSelectedImage() {
+  const candidate = selectedImageCandidate();
+  if (!candidate) return;
+  const { candidatePreviewUrl } = await import("./image-editor.js");
+  elements["image-preview"].src = await candidatePreviewUrl(candidate);
+  renderImageRegions();
+}
+
+function renderImageRegions() {
+  const regions = state.imageRegions.get(state.selectedImageId) || [];
+  elements["image-region-list"].innerHTML = regions.map((region, index) => `
+    <article class="image-region-row" data-image-region="${escapeHtml(region.id)}">
+      <div class="image-region-heading">
+        <label><input type="checkbox" data-region-field="enabled" ${region.enabled ? "checked" : ""} /> ${t("imageInclude")}</label>
+        <span>${Math.round(region.confidence)}%</span>
+      </div>
+      <small>${t("imageOriginal")}</small>
+      <p>${escapeHtml(region.text)}</p>
+      <label>${t("imageTranslation")}
+        <textarea rows="2" data-region-field="translation">${escapeHtml(region.translation)}</textarea>
+      </label>
+      <div class="image-region-geometry">
+        ${["x", "y", "width", "height"].map((field) => `<label>${field}<input type="number" min="0" step="1" data-region-field="${field}" value="${Number(region[field])}" /></label>`).join("")}
+        <label>${t("imageAngle")}<input type="number" min="-45" max="45" step="0.5" data-region-field="angle" value="${Number(region.angle || 0)}" /></label>
+      </div>
+    </article>
+  `).join("");
+  elements["apply-image-button"].hidden = !regions.length;
+}
+
+async function scanProjectImageFiles() {
+  setBusy(true);
+  elements["scan-images-button"].textContent = t("imageScanProgress");
+  try {
+    const candidates = await scanImagesInBackground(state.project);
+    state.imageCandidates = candidates;
+    state.imageRegions = new Map();
+    state.selectedImageId = candidates[0]?.id || "";
+    if (!candidates.length) {
+      elements["image-workspace"].hidden = true;
+      showNotice(t("imageNone"), "warning");
+      return;
+    }
+    elements["image-candidate-select"].innerHTML = candidates.map((candidate) =>
+      `<option value="${escapeHtml(candidate.id)}">${escapeHtml(candidate.sourceFileName ? `${candidate.sourceFileName} · ${candidate.path}` : candidate.path)} · ${candidate.width}×${candidate.height}</option>`,
+    ).join("");
+    elements["image-workspace"].hidden = false;
+    elements["image-status"].textContent = t("imageFound", { count: candidates.length });
+    await showSelectedImage();
+  } catch (error) {
+    showNotice(localizeError(error), "error");
+  } finally {
+    elements["scan-images-button"].textContent = t("imageScanButton");
+    setBusy(false);
+  }
+}
+
+async function recognizeSelectedImage() {
+  const candidate = selectedImageCandidate();
+  if (!candidate) return;
+  setBusy(true);
+  clearNotice();
+  try {
+    const { recognizeImageText, ocrLanguagesForProject } = await import("./image-editor.js");
+    const regions = await recognizeImageText(candidate, {
+      languages: ocrLanguagesForProject(state.project),
+      onProgress({ percent }) {
+        elements["image-status"].textContent = t("imageOcrProgress", { percent });
+      },
+    });
+    if (!regions.length) {
+      state.imageRegions.set(candidate.id, []);
+      elements["image-status"].textContent = t("imageNoText");
+      renderImageRegions();
+      return;
+    }
+    const detectedSource = state.project.sourceLanguages?.[0] || "en";
+    const temporaryProject = {
+      targetLanguage: state.targetLanguage,
+      entries: regions.map((region, index) => ({
+        id: String(index),
+        key: region.id,
+        source: region.text,
+        sourceLanguage: detectedSource,
+        sourceLocale: detectedSource,
+        translation: "",
+        status: "pending",
+        ignored: false,
+        warning: "",
+        translationBlocked: false,
+      })),
+    };
+    if (state.translatorStatus.supported) {
+      try {
+        await translateProject(temporaryProject, {
+          glossaryText: elements.glossary.value,
+          onDownloadProgress(percent) {
+            elements["image-status"].textContent = t("modelDetail", {
+              target: currentTarget().nativeName,
+              percent,
+            });
+          },
+          onProgress({ percent }) {
+            elements["image-status"].textContent = t("imageOcrProgress", { percent });
+          },
+        });
+      } catch (error) {
+        showNotice(localizeError(error), "warning");
+      }
+    }
+    temporaryProject.entries.forEach((entry, index) => {
+      regions[index].translation = entry.translation;
+    });
+    state.imageRegions.set(candidate.id, regions);
+    elements["image-status"].textContent = t("imageDetected", { count: regions.length });
+    renderImageRegions();
+  } catch (error) {
+    showNotice(localizeError(error), "error");
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function applySelectedImage() {
+  const candidate = selectedImageCandidate();
+  const regions = state.imageRegions.get(candidate?.id) || [];
+  if (!candidate || !regions.length) return;
+  setBusy(true);
+  try {
+    const { renderTranslatedImage } = await import("./image-editor.js");
+    const bytes = await renderTranslatedImage(candidate, regions);
+    const replacement = {
+      containerId: candidate.containerId,
+      path: candidate.path,
+      bytes,
+      ...(Number.isInteger(candidate.sourceProjectIndex)
+        ? { sourceProjectIndex: candidate.sourceProjectIndex }
+        : {}),
+    };
+    state.project.imageReplacements = [
+      ...(state.project.imageReplacements || []).filter((item) => !(
+        item.containerId === replacement.containerId
+        && item.path === replacement.path
+        && item.sourceProjectIndex === replacement.sourceProjectIndex
+      )),
+      replacement,
+    ];
+    candidate.bytes = bytes;
+    candidate.previewUrl = "";
+    await showSelectedImage();
+    elements["image-status"].textContent = t("imageApplied");
+    showNotice(t("imageApplied"), "success");
+  } catch (error) {
+    showNotice(localizeError(error), "error");
+  } finally {
+    setBusy(false);
+  }
+}
+
 async function loadFiles(fileList, { scroll = true } = {}) {
   const files = [...(fileList || [])];
   if (!files.length) return;
@@ -1228,6 +1434,9 @@ async function loadFiles(fileList, { scroll = true } = {}) {
   }
   state.sourceFiles = files;
   state.bedrockTranslationMode = "localized";
+  state.imageCandidates = [];
+  state.imageRegions = new Map();
+  state.selectedImageId = "";
   clearNotice();
   elements["drop-zone"].classList.add("loading");
   elements["drop-zone"].querySelector("strong").textContent = t("analyzing");
@@ -1241,9 +1450,16 @@ async function loadFiles(fileList, { scroll = true } = {}) {
           : t("analyzing");
       try {
         projects.push(
-          await analyzeArchive(file, {
+          await analyzeArchiveInBackground(file, {
             targetLanguage: state.targetLanguage,
             targetLocale: currentTarget().minecraftLocale,
+          }, {
+            onProgress({ percent }) {
+              elements["drop-zone"].querySelector("strong").textContent =
+                files.length > 1
+                  ? t("analyzingBatch", { current: index + 1, total: files.length })
+                  : `${t("analyzing")} ${percent}%`;
+            },
           }),
         );
       } catch (error) {
@@ -1255,6 +1471,10 @@ async function loadFiles(fileList, { scroll = true } = {}) {
     }
     state.project = combineProjects(projects);
     state.project.warnings.push(...failures);
+    state.imageCandidates = [];
+    state.imageRegions = new Map();
+    state.selectedImageId = "";
+    elements["image-workspace"].hidden = true;
     renderProject({ scroll });
   } catch (error) {
     showNotice(localizeError(error), "error");
@@ -1426,11 +1646,15 @@ async function downloadPack() {
     if ((state.project.game || "minecraft") === "minecraft" && state.project.edition !== "bedrock") {
       state.project.minecraftVersion = elements["minecraft-version"].value;
     }
-    const { archive, filename } = await buildResourcePack(
+    const { archive, filename } = await buildArchiveInBackground(
       state.project,
       state.project.minecraftVersion,
-      "blob",
       { bedrockTranslationMode: confirmedMode },
+      {
+        onProgress({ percent }) {
+          elements["download-label"].textContent = `${t("preparing")} ${percent}%`;
+        },
+      },
     );
     const url = URL.createObjectURL(archive);
     const anchor = document.createElement("a");
@@ -1449,6 +1673,7 @@ async function downloadPack() {
     showNotice(localizeError(error), "error");
   } finally {
     setBusy(false);
+    elements["download-label"].textContent = t(outputUiKeys(state.project).download);
     renderEntries();
   }
 }
@@ -1465,6 +1690,8 @@ function resetWorkspace() {
   elements["ui-language"].removeAttribute("title");
   elements["translation-paste"].value = "";
   elements["translation-file"].value = "";
+  elements["image-workspace"].hidden = true;
+  elements["image-region-list"].innerHTML = "";
   clearNotice();
   if (state.translatorStatus.supported) selectMode("local");
   elements["minecraft-settings"].hidden = false;
@@ -1504,6 +1731,23 @@ document.querySelectorAll("[data-minecraft-guide]").forEach((button) => {
 elements["mod-file"].addEventListener("change", () => {
   const files = elements["mod-file"].files;
   if (files?.length) loadFiles(files);
+});
+elements["scan-images-button"].addEventListener("click", scanProjectImageFiles);
+elements["image-candidate-select"].addEventListener("change", async (event) => {
+  state.selectedImageId = event.target.value;
+  await showSelectedImage();
+});
+elements["ocr-image-button"].addEventListener("click", recognizeSelectedImage);
+elements["apply-image-button"].addEventListener("click", applySelectedImage);
+elements["image-region-list"].addEventListener("input", (event) => {
+  const field = event.target.dataset.regionField;
+  const row = event.target.closest("[data-image-region]");
+  if (!field || !row) return;
+  const region = (state.imageRegions.get(state.selectedImageId) || []).find((item) => item.id === row.dataset.imageRegion);
+  if (!region) return;
+  if (field === "enabled") region.enabled = event.target.checked;
+  else if (field === "translation") region.translation = event.target.value;
+  else region[field] = Number(event.target.value);
 });
 for (const eventName of ["dragenter", "dragover"]) {
   elements["drop-zone"].addEventListener(eventName, (event) => {

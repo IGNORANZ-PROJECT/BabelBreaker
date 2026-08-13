@@ -60,6 +60,7 @@ test("Firebase permits only the pinned Hugging Face model hosts", async () => {
   ).value;
   assert.match(csp, /connect-src 'self' https:\/\/huggingface\.co/);
   assert.match(csp, /https:\/\/\*\.hf\.co/);
+  assert.match(csp, /https:\/\/cdn\.jsdelivr\.net/);
   assert.doesNotMatch(csp, /r2\.dev|storage\.googleapis\.com|raw\.githubusercontent\.com/);
   assert.equal(firebaseConfig.hosting.public, "dist");
   assert.equal(firebaseConfig.functions, undefined);
@@ -79,6 +80,7 @@ test("tracked legal notices cover the app and translation models", async () => {
   assert.match(notices, /Mozilla Public License Version 2\.0/);
   assert.match(notices, /@browsermt\/bergamot-translator@/);
   assert.match(notices, /jszip@/);
+  assert.match(notices, /tesseract\.js@7\.0\.0/);
 });
 
 test("privacy and security disclosures identify Firebase and model hosting", async () => {
@@ -86,7 +88,9 @@ test("privacy and security disclosures identify Firebase and model hosting", asy
   const security = await read("SECURITY.md");
   assert.match(privacy, /Firebase Hosting/);
   assert.match(privacy, /Hugging Face/);
+  assert.match(privacy, /jsDelivr/);
   assert.match(security, /Hugging Face/);
+  assert.match(security, /Tesseract\.js 7\.0\.0/);
   assert.match(security, /SHA-256/);
 });
 

@@ -71,9 +71,16 @@ export async function detectArtifactType(zip, fileName = "") {
   }
 
   if (manifestPath) {
-    const moduleTypes = new Set((manifest?.modules || []).map((module) => module?.type));
+    const bedrockManifests = [];
+    for (const entry of entries.filter((item) => !item.dir && /(^|\/)manifest\.json$/i.test(item.name))) {
+      const value = await readJson(entry);
+      if (value && Array.isArray(value.modules)) bedrockManifests.push({ path: entry.name, manifest: value });
+    }
+    const moduleTypes = new Set(
+      bedrockManifests.flatMap((item) => item.manifest.modules || []).map((module) => module?.type),
+    );
     if ([...moduleTypes].some((type) => ["resources", "data", "script", "world_template"].includes(type))) {
-      const variant = moduleTypes.has("resources") && !moduleTypes.has("data") && !moduleTypes.has("script")
+      const variant = bedrockManifests.length === 1 && moduleTypes.has("resources") && !moduleTypes.has("data") && !moduleTypes.has("script")
         ? "bedrock-resource-pack"
         : "bedrock-addon";
       return {
@@ -82,7 +89,9 @@ export async function detectArtifactType(zip, fileName = "") {
           : ARTIFACT_TYPES.bedrock_addon),
         variant,
         confidence: "high",
-        rootPrefix: markerPrefix(manifestPath, "manifest.json"),
+        rootPrefix: bedrockManifests.length === 1
+          ? markerPrefix(bedrockManifests[0].path, "manifest.json")
+          : "",
       };
     }
   }
@@ -623,6 +632,98 @@ function manifestEntries(zip) {
   return Object.values(zip.files).filter((entry) => !entry.dir && /(^|\/)manifest\.json$/i.test(entry.name));
 }
 
+// Bedrock accepts UUID-shaped identifiers from older tooling that do not
+// always set the RFC version/variant bits, so validate the shape only.
+const BEDROCK_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function validBedrockVersion(value) {
+  return Array.isArray(value)
+    && value.length === 3
+    && value.every((part) => Number.isInteger(Number(part)) && Number(part) >= 0);
+}
+
+/**
+ * Validate the parts of a Bedrock manifest that commonly make Minecraft reject
+ * an otherwise readable archive. The original UUIDs and file layout are never
+ * rewritten by this validator.
+ */
+export async function validateBedrockPack(zip, { label = "Bedrock pack" } = {}) {
+  const errors = [];
+  const warnings = [];
+  const manifests = manifestEntries(zip);
+  if (manifests.length !== 1) {
+    errors.push(`${label}: manifest.json must appear exactly once (found ${manifests.length}).`);
+    return { valid: false, errors, warnings, manifestPath: "" };
+  }
+  const manifestEntry = manifests[0];
+  const manifest = await readJson(manifestEntry);
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    errors.push(`${label}: manifest.json is not valid JSON.`);
+    return { valid: false, errors, warnings, manifestPath: manifestEntry.name };
+  }
+  if (![1, 2, 3].includes(Number(manifest.format_version))) {
+    errors.push(`${label}: manifest format_version is missing or unsupported.`);
+  }
+  if (!manifest.header || typeof manifest.header !== "object") {
+    errors.push(`${label}: manifest header is missing.`);
+  } else {
+    if (!String(manifest.header.name || "").trim()) errors.push(`${label}: manifest header.name is missing.`);
+    if (!BEDROCK_UUID.test(String(manifest.header.uuid || ""))) errors.push(`${label}: manifest header.uuid is invalid.`);
+    if (!validBedrockVersion(manifest.header.version)) errors.push(`${label}: manifest header.version is invalid.`);
+    if (!String(manifest.header.description || "").trim()) warnings.push(`${label}: manifest header.description is missing.`);
+  }
+  if (!Array.isArray(manifest.modules) || !manifest.modules.length) {
+    errors.push(`${label}: manifest modules are missing.`);
+  } else {
+    const uuids = new Set([String(manifest.header?.uuid || "").toLowerCase()].filter(Boolean));
+    manifest.modules.forEach((module, index) => {
+      const prefix = `${label}: module ${index + 1}`;
+      const uuid = String(module?.uuid || "").toLowerCase();
+      if (!String(module?.type || "").trim()) errors.push(`${prefix} type is missing.`);
+      if (!BEDROCK_UUID.test(uuid)) errors.push(`${prefix} uuid is invalid.`);
+      if (uuids.has(uuid)) errors.push(`${prefix} uuid is duplicated.`);
+      uuids.add(uuid);
+      if (!validBedrockVersion(module?.version)) errors.push(`${prefix} version is invalid.`);
+    });
+  }
+  for (const [index, dependency] of (Array.isArray(manifest.dependencies) ? manifest.dependencies : []).entries()) {
+    if (dependency?.uuid && !BEDROCK_UUID.test(String(dependency.uuid))) {
+      errors.push(`${label}: dependency ${index + 1} uuid is invalid.`);
+    }
+    if (dependency?.uuid && !validBedrockVersion(dependency.version)) {
+      errors.push(`${label}: dependency ${index + 1} version is invalid.`);
+    }
+  }
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings,
+    manifestPath: manifestEntry.name,
+  };
+}
+
+async function validateBedrockPacksInArchive(zip, label) {
+  const manifests = manifestEntries(zip);
+  if (!manifests.length) return [];
+  const results = [];
+  for (const manifestEntry of manifests) {
+    const prefix = manifestEntry.name.slice(0, -"manifest.json".length);
+    if (!prefix && manifests.length === 1) {
+      results.push(await validateBedrockPack(zip, { label }));
+      continue;
+    }
+    const pack = new JSZip();
+    for (const entry of Object.values(zip.files)) {
+      if (entry.dir || !entry.name.startsWith(prefix)) continue;
+      pack.file(entry.name.slice(prefix.length), await entry.async("uint8array"));
+    }
+    results.push(await validateBedrockPack(pack, {
+      label: `${label}${prefix ? ` (${prefix.replace(/\/$/, "")})` : ""}`,
+    }));
+  }
+  return results;
+}
+
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -767,6 +868,12 @@ export async function buildArtifactArchive(project, {
       const path = document.outputPath.replace(/^.*?(assets\/)/i, "$1");
       if (path.startsWith("assets/")) overlay.file(path, render(document));
     }
+    for (const replacement of project.imageReplacements || []) {
+      const path = replacement.path.replace(/^.*?(assets\/)/i, "$1");
+      if (replacement.containerId === "root" && path.startsWith("assets/")) {
+        overlay.file(path, replacement.bytes);
+      }
+    }
     return {
       archive: await overlay.generateAsync(archiveOptions(outputType)),
       filename: `${String(project.fileName).replace(ARCHIVE_EXTENSION, "")}.${project.targetLocale}.zip`,
@@ -779,7 +886,6 @@ export async function buildArtifactArchive(project, {
   const normalizeRoot = Boolean(rootPrefix) && (
     project.artifactType === "data_pack" ||
     project.artifactType === "bedrock_world" ||
-    project.artifactType === "bedrock_addon" ||
     (project.artifactType === "resource_pack" && project.edition === "bedrock")
   );
   if (normalizeRoot) {
@@ -842,6 +948,12 @@ export async function buildArtifactArchive(project, {
   };
 
   await applyDocuments(root, documentsByContainer.get("root"));
+  for (const replacement of (project.imageReplacements || []).filter((item) => item.containerId === "root")) {
+    const outputPath = normalizeRoot && replacement.path.startsWith(rootPrefix)
+      ? replacement.path.slice(rootPrefix.length)
+      : replacement.path;
+    root.file(outputPath, replacement.bytes);
+  }
   const levelDbPatch = project.artifactState?.levelDb
     ? (await import("./bedrock-leveldb.js")).buildBedrockLevelDbPatch(
         project,
@@ -865,6 +977,10 @@ export async function buildArtifactArchive(project, {
       overlay.file(document.outputPath.replace(/^.*?(assets\/)/i, "$1"), render(document));
       overlayEntries += 1;
     }
+    for (const replacement of (project.imageReplacements || []).filter((item) => item.containerId !== "root" && /(^|\/)assets\//i.test(item.path))) {
+      overlay.file(replacement.path.replace(/^.*?(assets\/)/i, "$1"), replacement.bytes);
+      overlayEntries += 1;
+    }
     if (overlayEntries) {
       overlay.file("pack.mcmeta", `${JSON.stringify(resourcePackMetadata || { pack: { pack_format: 34, description: `Babel Breaker ${project.targetLocale}` } }, null, 2)}\n`);
       const folder = project.artifact.variant === "modrinth"
@@ -881,40 +997,61 @@ export async function buildArtifactArchive(project, {
 
   for (const container of project.artifactState.containers.filter((item) => item.parentId === "root")) {
     const childDocuments = documentsByContainer.get(container.id);
+    const childImageReplacements = (project.imageReplacements || []).filter((item) => item.containerId === container.id);
     const needsManifestUpdate = bedrockVersionPlan?.records.some((record) =>
       record.containerId === container.id && (
         bedrockVersionPlan.changed.has(record.key) ||
         (record.manifest.dependencies || []).some((dependency) => dependency?.uuid && bedrockVersionPlan.versions.has(dependency.uuid))
       ),
     );
-    const needsPackExtensionNormalization =
-      project.artifactType === "bedrock_addon" && /\.zip$/i.test(container.entryPath);
-    if (!childDocuments?.length && !needsManifestUpdate && !needsPackExtensionNormalization) continue;
+    if (!childDocuments?.length && !needsManifestUpdate && !childImageReplacements.length) continue;
     let child = await JSZip.loadAsync(container.sourceBytes, { createFolders: false });
     const childRootPrefix = project.artifactType === "bedrock_addon"
       ? container.rootPrefix || ""
       : "";
-    if (childRootPrefix) {
-      const normalizedChild = new JSZip();
-      for (const entry of Object.values(child.files)) {
-        if (entry.dir || !entry.name.startsWith(childRootPrefix)) continue;
-        normalizedChild.file(entry.name.slice(childRootPrefix.length), await entry.async("uint8array"));
-      }
-      child = normalizedChild;
-    }
-    await applyDocuments(child, childDocuments, childRootPrefix);
+    // A nested pack may intentionally be wrapped or use a .zip filename.
+    // Preserve both exactly: changing either can break references in a valid
+    // third-party .mcaddon even when the inner ZIP remains readable.
+    await applyDocuments(child, childDocuments);
+    for (const replacement of childImageReplacements) child.file(replacement.path, replacement.bytes);
     await applyBedrockVersionPlan(child, container.id, bedrockVersionPlan, {
       rootPrefix: childRootPrefix,
-      normalizeRoot: Boolean(childRootPrefix),
+      normalizeRoot: false,
     });
     let entryPath = normalizeRoot && container.entryPath.startsWith(rootPrefix)
       ? container.entryPath.slice(rootPrefix.length)
       : container.entryPath;
-    if (project.artifactType === "bedrock_addon" && /\.zip$/i.test(entryPath)) {
-      root.remove(entryPath);
-      entryPath = entryPath.replace(/\.zip$/i, ".mcpack");
-    }
     root.file(entryPath, await child.generateAsync(archiveOptions("uint8array")));
+  }
+
+  if (project.artifactType === "bedrock_addon") {
+    const validationErrors = [];
+    for (const result of await validateBedrockPacksInArchive(root, project.fileName)) {
+      validationErrors.push(...result.errors);
+    }
+    for (const container of project.artifactState.containers.filter((item) => item.parentId === "root")) {
+      const entryPath = normalizeRoot && container.entryPath.startsWith(rootPrefix)
+        ? container.entryPath.slice(rootPrefix.length)
+        : container.entryPath;
+      const entry = root.file(entryPath);
+      if (!entry) {
+        validationErrors.push(`${entryPath}: rebuilt pack is missing.`);
+        continue;
+      }
+      try {
+        const child = await JSZip.loadAsync(await entry.async("uint8array"), { createFolders: false });
+        const result = await validateBedrockPack(child, { label: entryPath });
+        validationErrors.push(...result.errors);
+      } catch (error) {
+        validationErrors.push(`${entryPath}: rebuilt pack cannot be opened (${error.message}).`);
+      }
+    }
+    if (validationErrors.length) {
+      throw new Error(`Bedrock Add-on output validation failed: ${validationErrors.join(" ")}`);
+    }
+  } else if (project.edition === "bedrock" && project.artifactType === "resource_pack") {
+    const result = await validateBedrockPack(root, { label: project.fileName });
+    if (!result.valid) throw new Error(`Bedrock pack output validation failed: ${result.errors.join(" ")}`);
   }
 
   const archive = await root.generateAsync(archiveOptions(outputType));

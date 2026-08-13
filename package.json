@@ -30,11 +30,15 @@
     "@browsermt/bergamot-translator": "^0.4.9",
     "jszip": "3.10.1",
     "mcbe-leveldb-reader": "2.0.1",
-    "pako": "1.0.11"
+    "pako": "1.0.11",
+    "tesseract.js": "7.0.0"
   },
   "devDependencies": {
     "spdx-license-list": "^6.12.0",
     "vite": "7.3.6"
+  },
+  "overrides": {
+    "nanoid": "3.3.18"
   },
   "engines": {
     "node": ">=20"
