@@ -1873,7 +1873,7 @@ export function getProjectStats(project) {
     omitted: project.entries.length - output,
     needsReview,
     preserved,
-    namespaces: project.namespaces.length,
+    namespaces: project.namespaces?.length || 0,
   };
 }
 

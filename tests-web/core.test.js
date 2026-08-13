@@ -822,6 +822,21 @@ test("needs-review totals include every untranslated entry and exclude blank sou
   assert.equal(stats.excluded, 1);
 });
 
+test("project stats support temporary translation batches without namespaces", () => {
+  const stats = getProjectStats({
+    entries: [{
+      id: "ocr-region-1",
+      source: "Play",
+      translation: "プレイ",
+      status: "translated",
+      warning: "",
+    }],
+  });
+
+  assert.equal(stats.total, 1);
+  assert.equal(stats.namespaces, 0);
+});
+
 test("blank source values are marked as not translatable", async () => {
   const project = await analyzeArchive(
     await makeModFile({

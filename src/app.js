@@ -1330,6 +1330,7 @@ function imageTemporaryProject(detected) {
   const detectedSource = state.project.sourceLanguages?.[0] || "en";
   return {
     targetLanguage: state.targetLanguage,
+    namespaces: [],
     entries: detected.flatMap(({ candidate, regions }) => regions.map((region) => ({
       id: `${candidate.id}::${region.id}`,
       key: region.id,
