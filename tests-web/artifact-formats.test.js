@@ -80,7 +80,10 @@ async function outputZip(project, options) {
     "nodebuffer",
     options,
   );
-  return { ...result, zip: await JSZip.loadAsync(result.archive) };
+  return {
+    ...result,
+    zip: await JSZip.loadAsync(result.archive, { checkCRC32: true }),
+  };
 }
 
 test("Java resource packs are detected and returned as a minimal translation overlay", async () => {
@@ -92,9 +95,14 @@ test("Java resource packs are detected and returned as a minimal translation ove
   const project = await analyzeArchive(file);
   assert.equal(project.artifactType, "resource_pack");
   translate(project, { "Start Game": "ゲーム開始" });
-  const { zip } = await outputZip(project);
+  const resultArchive = await outputZip(project);
+  const { zip } = resultArchive;
   assert.deepEqual(JSON.parse(await zip.file("assets/clean/lang/ja_jp.json").async("string")), { "menu.start": "ゲーム開始" });
   assert.equal(zip.file("assets/clean/textures/gui.png"), null);
+  assert.equal(
+    (await analyzeArchive(new File([resultArchive.archive], resultArchive.filename))).artifactType,
+    "resource_pack",
+  );
 });
 
 test("data packs translate only known visible text component fields", async () => {
@@ -110,13 +118,18 @@ test("data packs translate only known visible text component fields", async () =
   assert.equal(project.artifactType, "data_pack");
   assert.deepEqual(project.entries.map((entry) => entry.source).sort(), ["Find the gate", "First Chapter", "Welcome hero"]);
   translate(project, { "First Chapter": "第一章", "Find the gate": "門を探す", "Welcome hero": "勇者よ、ようこそ" });
-  const { zip } = await outputZip(project);
+  const resultArchive = await outputZip(project);
+  const { zip } = resultArchive;
   const result = JSON.parse(await zip.file("data/story/advancement/chapter.json").async("string"));
   assert.equal(result.display.title.text, "第一章");
   assert.equal(result.criteria.gate.trigger, "minecraft:location");
   const command = await zip.file("data/story/function/welcome.mcfunction").async("string");
   assert.match(command, /勇者よ、ようこそ/);
   assert.match(command, /give @a minecraft:book/);
+  assert.equal(
+    (await analyzeArchive(new File([resultArchive.archive], resultArchive.filename))).artifactType,
+    "data_pack",
+  );
 });
 
 test("Bedrock packs export as collision-free translated copies", async () => {
@@ -194,10 +207,18 @@ test("mcaddon containers rebuild their nested packs", async () => {
     declaredLocales: ["en_us"],
   });
   translate(project, { "Example Creature": "サンプルの生物" });
-  const { zip } = await outputZip(project);
-  const rebuilt = await JSZip.loadAsync(await zip.file("Creatures-Resources.mcpack").async("uint8array"));
+  const resultArchive = await outputZip(project);
+  const { zip } = resultArchive;
+  const rebuilt = await JSZip.loadAsync(
+    await zip.file("Creatures-Resources.mcpack").async("uint8array"),
+    { checkCRC32: true },
+  );
   assert.match(await rebuilt.file("texts/ja_JP.lang").async("string"), /サンプルの生物/);
   assert.match(await rebuilt.file("texts/en_US.lang").async("string"), /Example Creature/);
+  assert.equal(
+    (await analyzeArchive(new File([resultArchive.archive], resultArchive.filename))).artifactType,
+    "bedrock_addon",
+  );
 });
 
 test("mcaddon accepts BOM, comments, and trailing commas in Bedrock manifests", async () => {
@@ -248,7 +269,8 @@ test("mcaddon accepts BOM, comments, and trailing commas in Bedrock manifests", 
   const project = await analyzeArchive(file);
   assert.equal(project.artifactType, "bedrock_addon");
   translate(project, { "Test item": "テストアイテム" });
-  const { zip } = await outputZip(project);
+  const resultArchive = await outputZip(project);
+  const { zip } = resultArchive;
   const rebuiltResource = await JSZip.loadAsync(await zip.file("TNW-R.mcpack").async("uint8array"));
   const rebuiltBehavior = await JSZip.loadAsync(await zip.file("TNW-B.mcpack").async("uint8array"));
   const resourceManifest = JSON.parse(await rebuiltResource.file("TNW-R/manifest.json").async("string"));
@@ -618,11 +640,16 @@ test("Bedrock worlds translate embedded packs while preserving LevelDB bytes", a
   const project = await analyzeArchive(file);
   assert.equal(project.artifactType, "bedrock_world");
   translate(project, { "Welcome traveler": "旅人よ、ようこそ" });
-  const { zip } = await outputZip(project);
+  const resultArchive = await outputZip(project);
+  const { zip } = resultArchive;
   assert.ok(zip.file("level.dat"));
   assert.equal(await zip.file("db/CURRENT").async("string"), "MANIFEST-000001\n");
   assert.match(await zip.file("resource_packs/story/texts/ja_JP.lang").async("string"), /旅人よ/);
   assert.deepEqual(JSON.parse(await zip.file("resource_packs/story/manifest.json").async("string")).header.version, [1, 0, 0]);
+  assert.equal(
+    (await analyzeArchive(new File([resultArchive.archive], resultArchive.filename))).artifactType,
+    "bedrock_world",
+  );
 });
 
 test("forced Bedrock world output replaces lang files inside embedded Add-ons", async () => {
@@ -672,7 +699,8 @@ test("Bedrock worlds translate commands and nested pack archives", async () => {
   assert.ok(project.entries.some((entry) => entry.source === "Welcome hero"));
   assert.ok(project.entries.some((entry) => entry.source === "Quest guide"));
   translate(project, { "Welcome hero": "勇者よ、ようこそ", "Quest guide": "クエストガイド" });
-  const { zip } = await outputZip(project);
+  const resultArchive = await outputZip(project);
+  const { zip } = resultArchive;
   assert.match(
     await zip.file("behavior_packs/quest/functions/start.mcfunction").async("string"),
     /勇者よ、ようこそ/,
@@ -854,10 +882,14 @@ test("Modrinth packs add one language overlay without rewriting nested MOD JARs"
   const project = await analyzeArchive(file);
   assert.equal(project.artifactType, "modpack");
   translate(project, { "Inside Mod": "内側のMOD" });
-  const { zip } = await outputZip(project);
+  const resultArchive = await outputZip(project);
+  const { zip } = resultArchive;
   assert.deepEqual([...await zip.file("overrides/mods/inside.jar").async("uint8array")], [...modBytes]);
   const overlay = await JSZip.loadAsync(await zip.file("client-overrides/resourcepacks/BabelBreaker-ja_jp.zip").async("uint8array"));
   assert.equal(JSON.parse(await overlay.file("assets/inside/lang/ja_jp.json").async("string"))["inside.title"], "内側のMOD");
+  const rebuilt = await analyzeArchive(new File([resultArchive.archive], resultArchive.filename));
+  assert.equal(rebuilt.artifactType, "modpack");
+  assert.equal(rebuilt.artifact.variant, "modrinth");
 });
 
 test("ModPack indexes can be supplemented with locally selected MOD JARs", async () => {
@@ -898,8 +930,12 @@ test("CurseForge exports report manifest-only files and place the overlay in ove
   assert.equal(project.artifact.variant, "curseforge");
   assert.equal(project.coverage.missingReferences, 1);
   translate(project, { "Third Party": "サードパーティ" });
-  const { zip } = await outputZip(project);
+  const resultArchive = await outputZip(project);
+  const { zip } = resultArchive;
   assert.ok(zip.file("overrides/resourcepacks/BabelBreaker-ja_jp.zip"));
+  const rebuilt = await analyzeArchive(new File([resultArchive.archive], resultArchive.filename));
+  assert.equal(rebuilt.artifactType, "modpack");
+  assert.equal(rebuilt.artifact.variant, "curseforge");
 });
 
 test("Java world archives rebuild nested resources.zip and keep world data", async () => {
@@ -914,10 +950,15 @@ test("Java world archives rebuild nested resources.zip and keep world data", asy
   const project = await analyzeArchive(file);
   assert.equal(project.artifactType, "java_world");
   translate(project, { "World Guide": "ワールドガイド" });
-  const { zip } = await outputZip(project);
+  const resultArchive = await outputZip(project);
+  const { zip } = resultArchive;
   assert.deepEqual([...await zip.file("region/r.0.0.mca").async("uint8array")], [4, 5, 6]);
   const rebuilt = await JSZip.loadAsync(await zip.file("resources.zip").async("uint8array"));
   assert.equal(JSON.parse(await rebuilt.file("assets/world/lang/ja_jp.json").async("string"))["world.guide"], "ワールドガイド");
+  assert.equal(
+    (await analyzeArchive(new File([resultArchive.archive], resultArchive.filename))).artifactType,
+    "java_world",
+  );
 });
 
 test("Java worlds translate known sign text inside Anvil region chunks", async () => {

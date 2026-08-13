@@ -586,8 +586,8 @@ test("Factorio locale CFG is exported inside a complete translated mod ZIP", asy
     entry.status = "edited";
   });
 
-  const { archive } = await buildResourcePack(project, undefined, "nodebuffer");
-  const zip = await JSZip.loadAsync(archive);
+  const { archive, filename } = await buildResourcePack(project, undefined, "nodebuffer");
+  const zip = await JSZip.loadAsync(archive, { checkCRC32: true });
   const output = await zip
     .file("example-factorio_1.0.0/locale/ja/base.cfg")
     .async("string");
@@ -596,6 +596,9 @@ test("Factorio locale CFG is exported inside a complete translated mod ZIP", asy
   assert.ok(
     zip.file("example-factorio_1.0.0/_BABEL_BREAKER_README.txt"),
   );
+  const rebuilt = await analyzeArchive(new File([archive], filename));
+  assert.equal(rebuilt.game, "factorio");
+  assert.equal(rebuilt.mod.id, "example-factorio");
 });
 
 test("Stardew Valley i18n is exported inside a complete translated mod ZIP", async () => {
@@ -617,14 +620,17 @@ test("Stardew Valley i18n is exported inside a complete translated mod ZIP", asy
   assert.equal(project.targetLocale, "de");
   project.entries[0].translation = "Willkommen auf dem Bauernhof!";
   project.entries[0].status = "edited";
-  const { archive } = await buildResourcePack(project, undefined, "nodebuffer");
-  const zip = await JSZip.loadAsync(archive);
+  const { archive, filename } = await buildResourcePack(project, undefined, "nodebuffer");
+  const zip = await JSZip.loadAsync(archive, { checkCRC32: true });
   assert.deepEqual(
     JSON.parse(await zip.file("ExampleStardew/i18n/de.json").async("string")),
     { greeting: "Willkommen auf dem Bauernhof!" },
   );
   assert.ok(zip.file("ExampleStardew/manifest.json"));
   assert.ok(zip.file("ExampleStardew/i18n/default.json"));
+  const rebuilt = await analyzeArchive(new File([archive], filename));
+  assert.equal(rebuilt.game, "stardew");
+  assert.equal(rebuilt.mod.id, "Example.Author.Mod");
 });
 
 test("RimWorld language XML is exported as a standalone translation mod", async () => {
@@ -646,8 +652,8 @@ test("RimWorld language XML is exported as a standalone translation mod", async 
     entry.translation = `訳:${entry.source}`;
     entry.status = "edited";
   }
-  const { archive } = await buildResourcePack(project, undefined, "nodebuffer");
-  const zip = await JSZip.loadAsync(archive);
+  const { archive, filename } = await buildResourcePack(project, undefined, "nodebuffer");
+  const zip = await JSZip.loadAsync(archive, { checkCRC32: true });
   const root = "Example_RimWorld_Mod_Japanese_Translation";
   assert.ok(
     zip.file(`${root}/Languages/Japanese/Keyed/UI.xml`),
@@ -662,6 +668,9 @@ test("RimWorld language XML is exported as a standalone translation mod", async 
   assert.match(about, /<packageId>example\.rimworld\.babelbreaker\.japanese<\/packageId>/);
   assert.match(about, /<loadAfter>[\s\S]*<li>example\.rimworld<\/li>/);
   assert.equal(zip.file("ExampleRimWorld/About/About.xml"), null);
+  const rebuilt = await analyzeArchive(new File([archive], filename));
+  assert.equal(rebuilt.game, "rimworld");
+  assert.equal(rebuilt.mod.id, "example.rimworld.babelbreaker.japanese");
 });
 
 test("each supported game uses its native target locale name", () => {
