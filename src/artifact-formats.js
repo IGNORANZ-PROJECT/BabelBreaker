@@ -729,10 +729,22 @@ function manifestEntries(zip) {
 // always set the RFC version/variant bits, so validate the shape only.
 const BEDROCK_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function bedrockVersionParts(value) {
+  if (
+    Array.isArray(value) &&
+    value.length === 3 &&
+    value.every((part) => Number.isInteger(Number(part)) && Number(part) >= 0)
+  ) {
+    return value.map(Number);
+  }
+  const match = String(value || "").trim().match(
+    /^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/,
+  );
+  return match ? match.slice(1, 4).map(Number) : null;
+}
+
 function validBedrockVersion(value) {
-  return Array.isArray(value)
-    && value.length === 3
-    && value.every((part) => Number.isInteger(Number(part)) && Number(part) >= 0);
+  return bedrockVersionParts(value) !== null;
 }
 
 /**
@@ -875,9 +887,12 @@ export async function validateBedrockAddonArchive(zip, {
     for (const dependency of (pack.manifest.dependencies || []).filter((item) => item?.uuid)) {
       const target = headers.get(String(dependency.uuid).toLowerCase());
       if (!target) continue;
+      const dependencyVersion = bedrockVersionParts(dependency.version);
+      const targetVersion = bedrockVersionParts(target.version);
       if (
-        !validBedrockVersion(dependency.version) ||
-        dependency.version.some((part, index) => Number(part) !== Number(target.version?.[index]))
+        !dependencyVersion ||
+        !targetVersion ||
+        dependencyVersion.some((part, index) => part !== targetVersion[index])
       ) {
         errors.push(`${label}: ${pack.name} dependency version does not match ${target.name}.`);
       }

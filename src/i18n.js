@@ -101,6 +101,8 @@ const rows = {
   translating: ["Translating", "翻訳中", "번역 중", "正在翻译", "Traduciendo"],
   translatingTo: ["Translating to {target}", "{target}へ翻訳しています", "{target}(으)로 번역 중", "正在翻译为{target}", "Traduciendo a {target}"],
   preparing: ["Preparing…", "準備しています…", "준비 중…", "准备中…", "Preparando…"],
+  savePreparedBatch: ["Save batch ZIP", "一括ZIPを保存", "일괄 ZIP 저장", "保存批量 ZIP", "Guardar ZIP por lotes"],
+  batchDownloadPrepared: ["{filename} is ready. Select “Save batch ZIP” to save it to this device.", "{filename} の準備ができました。「一括ZIPを保存」を押して端末へ保存してください。", "{filename} 준비가 완료되었습니다. ‘일괄 ZIP 저장’을 눌러 기기에 저장하세요.", "{filename} 已准备就绪。请选择“保存批量 ZIP”将其保存到设备。", "{filename} está listo. Selecciona «Guardar ZIP por lotes» para guardarlo en este dispositivo."],
   cancel: ["Stop", "中止", "중지", "停止", "Detener"],
   pasteTitle: ["Paste translated data", "翻訳結果を貼り戻す", "번역 결과 붙여넣기", "粘贴翻译结果", "Pegar los datos traducidos"],
   pasteCopy: ["Keep every key unchanged and translate values to {target}", "キーを変更せず、値だけ{target}に翻訳してください", "키는 변경하지 말고 값만 {target}(으)로 번역하세요", "保持所有键不变，仅将值翻译为{target}", "Mantén cada clave y traduce solo los valores a {target}"],

@@ -323,6 +323,28 @@ test("Bedrock manifest compatibility parsing still rejects incomplete comments",
   assert.match(result.errors.join(" "), /not valid JSON/);
 });
 
+test("Bedrock UUID dependencies accept semantic version strings", async () => {
+  const resourceUuid = "81818181-8181-8181-8181-818181818181";
+  const resource = new JSZip();
+  resource.file("manifest.json", JSON.stringify({
+    format_version: 2,
+    header: { name: "Backpack RP", description: "Resources", uuid: resourceUuid, version: [1, 1, 0] },
+    modules: [{ type: "resources", uuid: "82828282-8282-8282-8282-828282828282", version: [1, 1, 0] }],
+  }));
+  const behavior = new JSZip();
+  behavior.file("manifest.json", JSON.stringify({
+    format_version: 2,
+    header: { name: "Backpack BP", description: "Behavior", uuid: "83838383-8383-8383-8383-838383838383", version: [1, 1, 0] },
+    modules: [{ type: "data", uuid: "84848484-8484-8484-8484-848484848484", version: [1, 1, 0] }],
+    dependencies: [{ uuid: resourceUuid, version: "1.1.0" }],
+  }));
+  const addon = new JSZip();
+  addon.file("Simple Backpack RP.mcpack", await resource.generateAsync({ type: "uint8array" }));
+  addon.file("Simple Backpack BP.mcpack", await behavior.generateAsync({ type: "uint8array" }));
+  const result = await validateBedrockAddonArchive(addon, { requirePackArchives: true });
+  assert.equal(result.valid, true, result.errors.join(" "));
+});
+
 test("mcaddon converts loose pack directories to root-level mcpack files", async () => {
   const resourceUuid = "10101010-1010-1010-1010-101010101010";
   const file = await archiveFile("Folders.mcaddon", {

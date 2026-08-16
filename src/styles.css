@@ -1764,6 +1764,10 @@ select {
   border-top: 1px solid var(--line);
 }
 
+.download-notice {
+  margin: 12px 0 0;
+}
+
 .download-row > div span,
 .download-row > div strong {
   display: block;

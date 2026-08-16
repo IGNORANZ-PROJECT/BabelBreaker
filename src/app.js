@@ -31,6 +31,7 @@ import {
   detectUiLocale,
 } from "./i18n.js";
 import { selectGuideForProject } from "./guide-selection.js";
+import { requiresPreparedBatchDownload } from "./download-policy.js";
 import {
   bedrockLocalizationSummary,
   recommendedBedrockOutputMode,
@@ -87,6 +88,7 @@ const state = {
   selectedEntryIds: new Set(),
   lastSelectedEntryId: "",
   reviewTab: "text",
+  preparedDownload: null,
 };
 const CONTENT_KIND_LABELS = {
   patchouli: "Patchouli",
@@ -530,6 +532,7 @@ document.querySelector("#app").innerHTML = `
             ${icon("download", 18)} <span id="download-label">${t("downloadPack")}</span>
           </button>
         </div>
+        <div id="download-notice" class="notice download-notice" role="alert" hidden></div>
       </section>
     </section>
 
@@ -638,6 +641,7 @@ const elements = Object.fromEntries(
     "workspace",
     "workspace-title",
     "notice",
+    "download-notice",
     "reset-button",
     "file-name",
     "mod-name",
@@ -758,10 +762,21 @@ function artifactLabel(project = state.project) {
   return t(`artifact_${project.artifactType}`) || SUPPORTED_ARTIFACTS[project.artifactType]?.label || project.artifactType;
 }
 
+function renderNotice(element, message, type = "info") {
+  element.className = `notice${element === elements["download-notice"] ? " download-notice" : ""} ${type}`;
+  element.innerHTML = `${type === "error" ? icon("warning", 18) : icon("check", 18)}<span>${escapeHtml(message)}</span>`;
+  element.hidden = false;
+}
+
 function showNotice(message, type = "info") {
-  elements.notice.className = `notice ${type}`;
-  elements.notice.innerHTML = `${type === "error" ? icon("warning", 18) : icon("check", 18)}<span>${escapeHtml(message)}</span>`;
-  elements.notice.hidden = false;
+  renderNotice(elements.notice, message, type);
+}
+
+function showDownloadNotice(message, type = "info") {
+  renderNotice(elements["download-notice"], message, type);
+  requestAnimationFrame(() => {
+    elements["download-notice"].scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
 }
 
 function localizeError(error) {
@@ -787,6 +802,33 @@ function localizeError(error) {
 
 function clearNotice() {
   elements.notice.hidden = true;
+  elements["download-notice"].hidden = true;
+}
+
+function clearPreparedDownload() {
+  if (!state.preparedDownload) return;
+  URL.revokeObjectURL(state.preparedDownload.url);
+  state.preparedDownload = null;
+  if (state.project && elements["download-label"]) {
+    elements["download-label"].textContent = t(outputUiKeys(state.project).download);
+  }
+}
+
+function triggerPreparedDownload() {
+  const prepared = state.preparedDownload;
+  if (!prepared) return false;
+  const anchor = document.createElement("a");
+  anchor.href = prepared.url;
+  anchor.download = prepared.filename;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  state.preparedDownload = null;
+  setTimeout(() => URL.revokeObjectURL(prepared.url), 60_000);
+  elements["download-label"].textContent = t(outputUiKeys(state.project).download);
+  showDownloadNotice(t(prepared.successKey, { filename: prepared.filename }), "success");
+  document.querySelector("#guide").scrollIntoView({ behavior: "smooth", block: "start" });
+  return true;
 }
 
 function setBusy(busy) {
@@ -1763,6 +1805,7 @@ async function applySelectedImageSettings() {
 async function loadFiles(fileList, { scroll = true } = {}) {
   const files = [...(fileList || [])];
   if (!files.length) return;
+  clearPreparedDownload();
   if (files.length > MAX_BATCH_FILES) {
     showNotice(t("tooManyMods", { count: MAX_BATCH_FILES }), "error");
     return;
@@ -1998,6 +2041,10 @@ function applyPastedTranslation({ loadedFileName = "" } = {}) {
 }
 
 async function downloadPack() {
+  // A prepared batch must be saved directly inside this click handler.
+  // Safari and some mobile browsers reject a synthetic download after a long
+  // asynchronous archive build because the original user activation expired.
+  if (triggerPreparedDownload()) return;
   const confirmedMode = await confirmBedrockDownloadMode();
   if (!confirmedMode) return;
   setBusy(true);
@@ -2017,6 +2064,18 @@ async function downloadPack() {
       },
     );
     const url = URL.createObjectURL(archive);
+    const batchDownload = requiresPreparedBatchDownload(state.project);
+    if (batchDownload) {
+      state.preparedDownload = {
+        url,
+        filename,
+        successKey: outputUiKeys(state.project).success,
+      };
+      elements["download-label"].textContent = t("savePreparedBatch");
+      showDownloadNotice(t("batchDownloadPrepared", { filename }), "success");
+      elements["download-button"].focus();
+      return;
+    }
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.download = filename;
@@ -2024,22 +2083,25 @@ async function downloadPack() {
     anchor.click();
     anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
-    showNotice(
+    showDownloadNotice(
       t(outputUiKeys(state.project).success, { filename }),
       "success",
     );
     document.querySelector("#guide").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
-    showNotice(localizeError(error), "error");
+    showDownloadNotice(localizeError(error), "error");
   } finally {
     setBusy(false);
-    elements["download-label"].textContent = t(outputUiKeys(state.project).download);
+    elements["download-label"].textContent = state.preparedDownload
+      ? t("savePreparedBatch")
+      : t(outputUiKeys(state.project).download);
     renderEntries();
   }
 }
 
 function resetWorkspace() {
   if (state.busy) return;
+  clearPreparedDownload();
   state.project = null;
   state.sourceFiles = [];
   state.filter = "warning";
@@ -2302,6 +2364,7 @@ elements["translation-paste"].addEventListener("drop", (event) => {
 });
 elements["download-button"].addEventListener("click", downloadPack);
 elements["bedrock-output-mode"].addEventListener("change", (event) => {
+  clearPreparedDownload();
   state.bedrockTranslationMode = event.target.value === "forced"
     ? "forced"
     : "localized";

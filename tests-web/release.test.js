@@ -122,6 +122,12 @@ test("the archive picker stays usable for ZIP-based game extensions in Safari", 
   );
 });
 
+test("download errors have a notice beside the download controls", async () => {
+  const app = await read("src/app.js");
+  assert.match(app, /<div id="download-notice" class="notice download-notice" role="alert" hidden><\/div>/);
+  assert.match(app, /catch \(error\) \{\s*showDownloadNotice\(localizeError\(error\), "error"\);/);
+});
+
 test("public SEO metadata is complete and crawlable", async () => {
   const html = await read("index.html");
   assert.match(html, /rel="canonical" href="https:\/\/babel-breaker\.web\.app\/"/);
