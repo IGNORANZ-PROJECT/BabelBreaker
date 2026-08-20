@@ -345,6 +345,39 @@ test("Bedrock UUID dependencies accept semantic version strings", async () => {
   assert.equal(result.valid, true, result.errors.join(" "));
 });
 
+test("mcaddon export repairs stale internal dependency versions", async () => {
+  const resourceUuid = "85858585-8585-8585-8585-858585858585";
+  const resource = new JSZip();
+  resource.file("manifest.json", JSON.stringify({
+    format_version: 2,
+    header: { name: "joR", description: "Resources", uuid: resourceUuid, version: [1, 6, 63] },
+    modules: [{ type: "resources", uuid: "86868686-8686-8686-8686-868686868686", version: [1, 0, 0] }],
+  }));
+  resource.file("texts/en_US.lang", "item.tbw.name=Backpack\n");
+  const behavior = new JSZip();
+  behavior.file("manifest.json", JSON.stringify({
+    format_version: 2,
+    header: { name: "joB", description: "Behavior", uuid: "87878787-8787-8787-8787-878787878787", version: [1, 6, 63] },
+    modules: [{ type: "data", uuid: "88888888-8787-8787-8787-878787878787", version: [1, 0, 0] }],
+    dependencies: [{ uuid: resourceUuid, version: [1, 6, 62] }],
+  }));
+  const file = await archiveFile("TBW1.663.mcaddon", {
+    "joR.mcpack": await resource.generateAsync({ type: "uint8array" }),
+    "joB.mcpack": await behavior.generateAsync({ type: "uint8array" }),
+  });
+  const project = await analyzeArchive(file);
+  translate(project, { Backpack: "バックパック" });
+  const { zip } = await outputZip(project);
+  const rebuiltResource = await outputBedrockPack(zip, "joR");
+  const rebuiltBehavior = await outputBedrockPack(zip, "joB");
+  const resourceManifest = JSON.parse(await rebuiltResource.file("manifest.json").async("string"));
+  const behaviorManifest = JSON.parse(await rebuiltBehavior.file("manifest.json").async("string"));
+  assert.equal(behaviorManifest.dependencies[0].uuid, resourceManifest.header.uuid);
+  assert.deepEqual(behaviorManifest.dependencies[0].version, resourceManifest.header.version);
+  const validation = await validateBedrockAddonArchive(zip, { requirePackArchives: true });
+  assert.equal(validation.valid, true, validation.errors.join(" "));
+});
+
 test("mcaddon converts loose pack directories to root-level mcpack files", async () => {
   const resourceUuid = "10101010-1010-1010-1010-101010101010";
   const file = await archiveFile("Folders.mcaddon", {

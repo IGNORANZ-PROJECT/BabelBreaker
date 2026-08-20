@@ -1068,6 +1068,7 @@ async function prepareBedrockVersionPlan(project, rootZip) {
   const exportNonce = globalThis.crypto?.randomUUID?.()
     || `${Date.now()}-${Math.random()}`;
   const headerUuids = new Map();
+  const headerVersions = new Map();
   const rekeys = new Map();
   for (const record of records) {
     const container = containers.find((item) => item.id === record.containerId);
@@ -1138,6 +1139,8 @@ async function prepareBedrockVersionPlan(project, rootZip) {
     rekeys.set(record.key, { headerUuid, moduleUuids });
     if (BEDROCK_UUID.test(sourceHeaderUuid) && !headerUuids.has(sourceHeaderUuid)) {
       headerUuids.set(sourceHeaderUuid, headerUuid);
+      const sourceVersion = record.manifest.header?.version;
+      if (sourceVersion != null) headerVersions.set(sourceHeaderUuid, cloneJson(sourceVersion));
     }
     // Script API versions are compatibility declarations, not cosmetic
     // metadata. In particular, a `-beta` dependency is a different API track
@@ -1162,7 +1165,7 @@ async function prepareBedrockVersionPlan(project, rootZip) {
     }
   }
 
-  return { records, headerUuids, rekeys };
+  return { records, headerUuids, headerVersions, rekeys };
 }
 
 async function applyBedrockVersionPlan(zip, containerId, plan, { rootPrefix = "", normalizeRoot = false } = {}) {
@@ -1177,9 +1180,19 @@ async function applyBedrockVersionPlan(zip, containerId, plan, { rootPrefix = ""
       module.uuid = rekey.moduleUuids[index];
     });
     for (const dependency of manifest.dependencies || []) {
-      const dependencyUuid = dependency?.uuid
-        && plan.headerUuids.get(String(dependency.uuid).toLowerCase());
-      if (dependencyUuid) dependency.uuid = dependencyUuid;
+      const sourceDependencyUuid = dependency?.uuid
+        ? String(dependency.uuid).toLowerCase()
+        : "";
+      const dependencyUuid = sourceDependencyUuid
+        && plan.headerUuids.get(sourceDependencyUuid);
+      if (dependencyUuid) {
+        dependency.uuid = dependencyUuid;
+        // Once an internal pack UUID is rekeyed, its dependency declaration
+        // must describe that exact exported pack. Some Add-ons ship with a
+        // stale dependency version even though Minecraft tolerated the source.
+        const targetVersion = plan.headerVersions.get(sourceDependencyUuid);
+        if (targetVersion != null) dependency.version = cloneJson(targetVersion);
+      }
     }
     const outputPath = normalizeRoot && record.path.startsWith(rootPrefix)
       ? record.path.slice(rootPrefix.length)
